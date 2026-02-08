@@ -183,6 +183,11 @@ class DominionEnergyAPI:
         """Fetch energy usage data from Dominion Energy."""
         # Only attempt login if we don't already have a bearer token (manual token mode)
         if not self._bearer_token:
+            # Check if we have credentials for automatic login
+            if not self.username or not self.password:
+                _LOGGER.error("No bearer token and no username/password configured - cannot fetch data")
+                raise DominionEnergyAPIError("Authentication not configured")
+            
             _LOGGER.debug("No bearer token found, attempting login")
             login_success = await self.async_login()
             if not login_success:
