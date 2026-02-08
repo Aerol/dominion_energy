@@ -155,10 +155,15 @@ class DominionEnergyAPI:
             "channel": "WEB",
         }
         
-        if include_account and self._account_number:
-            headers["accountNumber"] = f"*****{self._account_number[-7:]}"
-            if self._customer_number:
-                headers["customerNumber"] = f"*****{self._customer_number[-5:]}"
+        if include_account:
+            if self._account_number:
+                # Mask account number: show last 7 digits (e.g., *****8858444)
+                masked_account = f"*****{self._account_number[-7:]}"
+                headers["accountNumber"] = masked_account
+                _LOGGER.debug("Added masked accountNumber header: %s", masked_account)
+            
+            # Customer number is optional - if we don't have it, that's OK
+            # It will be populated from API responses if available
         
         return headers
 
@@ -209,7 +214,14 @@ class DominionEnergyAPI:
                     data = await response.json()
                     return self._parse_usage_data(data)
                 else:
-                    _LOGGER.error("Failed to get usage data: %s", response.status)
+                    # Log the full error response
+                    error_text = await response.text()
+                    _LOGGER.error(
+                        "Failed to get usage data: %s - %s. URL: %s, Headers: %s, Response: %s",
+                        response.status, response.reason, USAGE_ELECTRIC_URL, 
+                        {k: v for k, v in headers.items() if k != "Authorization"},
+                        error_text[:500]
+                    )
                     raise DominionEnergyAPIError(f"Failed to get usage data: {response.status}")
                     
         except aiohttp.ClientError as err:
