@@ -329,23 +329,28 @@ class DominionEnergyAPI:
         days_in_period = 30  # Approximate
         daily_usage = monthly_consumption / days_in_period if monthly_consumption > 0 else 0
         
-        # Get current hour usage from hourly data
-        current_hour_usage = 0
-        if hourly_data:
-            # Get the most recent hour
-            current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
-            for reading in hourly_data:
-                try:
-                    # Parse the date string "2/6/2026 12:00:00 AM"
-                    reading_date = datetime.strptime(reading.get("readDate", ""), "%m/%d/%Y %I:%M:%S %p")
-                    if reading_date.hour == current_hour.hour:
-                        current_hour_usage = float(reading.get("consumption", 0))
-                        break
-                except (ValueError, AttributeError):
-                    continue
+        # Get the most recent hourly reading
+        last_hour_usage = 0
+        last_hour_time = None
+        if hourly_data and len(hourly_data) > 0:
+            # Sort by date and get the most recent
+            try:
+                sorted_data = sorted(
+                    hourly_data,
+                    key=lambda x: datetime.strptime(x.get("readDate", "1/1/2000 12:00:00 AM"), "%m/%d/%Y %I:%M:%S %p"),
+                    reverse=True
+                )
+                if sorted_data:
+                    most_recent = sorted_data[0]
+                    last_hour_usage = float(most_recent.get("consumption", 0))
+                    last_hour_time = most_recent.get("readDate")
+                    _LOGGER.debug("Most recent hourly reading: %s kWh at %s", last_hour_usage, last_hour_time)
+            except (ValueError, AttributeError) as err:
+                _LOGGER.warning("Error parsing hourly data: %s", err)
         
         return {
-            "current_hour_usage": round(current_hour_usage, 2),
+            "last_hour_usage": round(last_hour_usage, 3),
+            "last_hour_reading_time": last_hour_time,
             "daily_usage": round(daily_usage, 2),
             "monthly_usage": round(monthly_consumption, 2),
             "estimated_cost": round(monthly_cost, 2),

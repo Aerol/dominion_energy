@@ -68,23 +68,35 @@ class DominionEnergySensorBase(CoordinatorEntity, SensorEntity):
 
 
 class DominionEnergyCurrentHourUsageSensor(DominionEnergySensorBase):
-    """Sensor for current hour energy usage."""
+    """Sensor for most recent hourly energy usage."""
 
-    _attr_name = "Current Hour Usage"
+    _attr_name = "Last Hour Usage"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_icon = "mdi:clock-outline"
 
     @property
     def unique_id(self) -> str:
         """Return unique ID for this sensor."""
-        return f"{self._config_entry.entry_id}_current_hour_usage"
+        return f"{self._config_entry.entry_id}_last_hour_usage"
 
     @property
     def native_value(self):
         """Return the state of the sensor."""
         if self.coordinator.data:
-            return self.coordinator.data.get("current_hour_usage")
+            value = self.coordinator.data.get("last_hour_usage", 0)
+            _LOGGER.debug("Last hour usage sensor value: %s", value)
+            return value
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional attributes."""
+        if self.coordinator.data:
+            return {
+                "last_reading_time": self.coordinator.data.get("last_hour_reading_time"),
+            }
         return None
 
 
