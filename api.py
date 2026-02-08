@@ -1,0 +1,276 @@
+"""API Client for Dominion Energy Virginia."""
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+from datetime import datetime, timedelta
+from urllib.parse import urlencode
+
+import aiohttp
+
+from .const import (
+    GIGYA_API_KEY,
+    GIGYA_LOGIN_URL,
+    TOKEN_URL,
+    USAGE_ELECTRIC_URL,
+    USAGE_HOURLY_URL,
+    ACCOUNT_DETAILS_URL,
+    ACCOUNT_INFO_URL,
+    BILLING_URL,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class DominionEnergyAPIError(Exception):
+    """Exception for Dominion Energy API errors."""
+
+
+class DominionEnergyAPI:
+    """API client for Dominion Energy Virginia."""
+
+    def __init__(self, username: str, password: str, session: aiohttp.ClientSession) -> None:
+        """Initialize the API client."""
+        self.username = username
+        self.password = password
+        self.session = session
+        self._gigya_id_token = None
+        self._gigya_uid = None
+        self._bearer_token = None
+        self._account_number = None
+        self._customer_number = None
+        self._meter_number = None
+
+    async def async_login(self) -> bool:
+        """Login to Dominion Energy via Gigya and obtain tokens."""
+        try:
+            # Step 1: Login to Gigya
+            login_data = {
+                "loginID": self.username,
+                "password": self.password,
+                "sessionExpiration": "3600",
+                "targetEnv": "jssdk",
+                "include": "profile,data,emails,subscriptions,preferences,id_token,groups,loginIDs,",
+                "includeUserInfo": "true",
+                "loginMode": "standard",
+                "lang": "en",
+                "APIKey": GIGYA_API_KEY,
+                "source": "showScreenSet",
+                "sdk": "js_latest",
+                "authMode": "cookie",
+                "pageURL": "https://login.dominionenergy.com/CommonLogin?SelectedAppName=Electric",
+                "format": "json",
+            }
+            
+            async with self.session.post(
+                GIGYA_LOGIN_URL,
+                data=urlencode(login_data),
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            ) as response:
+                if response.status != 200:
+                    _LOGGER.error("Gigya login failed with status %s", response.status)
+                    return False
+                
+                data = await response.json()
+                
+                if data.get("errorCode", 0) != 0:
+                    _LOGGER.error("Gigya login error: %s", data.get("statusReason"))
+                    return False
+                
+                self._gigya_id_token = data.get("id_token")
+                self._gigya_uid = data.get("UID")
+                
+                if not self._gigya_id_token or not self._gigya_uid:
+                    _LOGGER.error("Missing id_token or UID from Gigya response")
+                    return False
+            
+            # Step 2: Exchange Gigya token for Dominion bearer token
+            # The bearer token appears to be generated client-side or returned in a way we couldn't capture
+            # For now, we'll use the Gigya id_token as the bearer token
+            self._bearer_token = self._gigya_id_token
+            
+            # Step 3: Get account information
+            await self._get_account_info()
+            
+            return True
+                    
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Error during login: %s", err)
+            raise DominionEnergyAPIError(f"Login failed: {err}") from err
+
+    async def _get_account_info(self) -> None:
+        """Fetch account and meter information."""
+        try:
+            headers = self._get_headers()
+            
+            # This endpoint requires account number, but we need to get it first
+            # In practice, the account number might be stored in Gigya data
+            # For now, we'll try to extract it from subsequent calls
+            _LOGGER.debug("Account info retrieval deferred until first usage call")
+            
+        except Exception as err:
+            _LOGGER.warning("Could not fetch account info: %s", err)
+
+    def _get_headers(self, include_account: bool = False) -> dict[str, str]:
+        """Get standard headers for API requests."""
+        headers = {
+            "Authorization": f"Bearer {self._bearer_token}",
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,PUT,POST,DELETE,PATCH,OPTIONS",
+            "uid": "1",
+            "pt": "1",
+            "ReferenceId": f"MM-{uuid.uuid4()}",
+            "channel": "WEB",
+        }
+        
+        if include_account and self._account_number:
+            headers["accountNumber"] = f"*****{self._account_number[-7:]}"
+            if self._customer_number:
+                headers["customerNumber"] = f"*****{self._customer_number[-5:]}"
+        
+        return headers
+
+    async def async_get_usage_data(self) -> dict[str, Any]:
+        """Fetch energy usage data from Dominion Energy."""
+        if not self._bearer_token:
+            await self.async_login()
+        
+        try:
+            # Get monthly usage data
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=365)  # Last year
+            
+            params = {
+                "AccountNumber": self._account_number or "",
+                "MeterNumber": self._meter_number or "",
+                "From": start_date.strftime("%Y-%m-%d"),
+                "To": end_date.strftime("%Y-%m-%d"),
+                "Uom": "kWh",
+                "Periodicity": "MO",  # Monthly data
+            }
+            
+            headers = self._get_headers(include_account=True)
+            
+            async with self.session.get(
+                USAGE_ELECTRIC_URL,
+                headers=headers,
+                params=params
+            ) as response:
+                if response.status == 401:
+                    # Token expired, re-login
+                    await self.async_login()
+                    return await self.async_get_usage_data()
+                
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_usage_data(data)
+                else:
+                    _LOGGER.error("Failed to get usage data: %s", response.status)
+                    raise DominionEnergyAPIError(f"Failed to get usage data: {response.status}")
+                    
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Error fetching usage data: %s", err)
+            raise DominionEnergyAPIError(f"Failed to fetch usage data: {err}") from err
+
+    async def async_get_hourly_usage(self, date: datetime) -> list[dict]:
+        """Fetch hourly usage data for a specific date."""
+        try:
+            params = {
+                "accountNumber": self._account_number,
+                "ActionCode": "4",  # Hourly data
+                "StartDate": date.strftime("%Y-%m-%d"),
+                "EndDate": (date + timedelta(days=1)).strftime("%Y-%m-%d"),
+            }
+            
+            headers = self._get_headers(include_account=True)
+            
+            async with self.session.get(
+                USAGE_HOURLY_URL,
+                headers=headers,
+                params=params
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("status", {}).get("type") == "success":
+                        return data.get("data", {}).get("electricUsages", [])
+                return []
+                
+        except Exception as err:
+            _LOGGER.warning("Error fetching hourly usage: %s", err)
+            return []
+
+    async def async_get_billing_info(self) -> dict[str, Any] | None:
+        """Fetch current billing information."""
+        try:
+            if not self._account_number:
+                return None
+            
+            # Get the most recent invoice
+            params = {
+                "invoiceId": "",  # Empty to get latest
+                "accountNumber": self._account_number,
+            }
+            
+            headers = self._get_headers(include_account=True)
+            
+            async with self.session.get(
+                BILLING_URL,
+                headers=headers,
+                params=params
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("status", {}).get("type") == "success":
+                        billing_data = data.get("data", {})
+                        results = billing_data.get("zBillInvHeadtoItemNav", {}).get("results", [])
+                        if results:
+                            return results[0]  # Most recent bill
+                return None
+                
+        except Exception as err:
+            _LOGGER.warning("Error fetching billing info: %s", err)
+            return None
+
+    def _parse_usage_data(self, raw_data: dict) -> dict[str, Any]:
+        """Parse the raw API response into usable data."""
+        result = raw_data.get("Result", {})
+        usages = result.get("electricUsages", [])
+        
+        if not usages:
+            return {
+                "current_usage": 0,
+                "daily_usage": 0,
+                "monthly_usage": 0,
+                "estimated_cost": 0,
+                "peak_demand": 0,
+                "last_updated": datetime.now().isoformat(),
+            }
+        
+        # Extract account and meter info from first record
+        if usages and not self._account_number:
+            self._account_number = usages[0].get("accountNumber")
+            self._meter_number = usages[0].get("meterNumber")
+        
+        # Get the most recent month's data
+        latest = usages[-1] if usages else {}
+        
+        # Calculate totals
+        monthly_consumption = sum(float(u.get("consumption", 0)) for u in usages[-1:])
+        monthly_cost = sum(float(u.get("amount", 0)) for u in usages[-1:])
+        
+        # Estimate daily usage from most recent month
+        days_in_period = 30  # Approximate
+        daily_usage = monthly_consumption / days_in_period if monthly_consumption > 0 else 0
+        
+        return {
+            "current_usage": 0,  # Not available in monthly data
+            "daily_usage": round(daily_usage, 2),
+            "monthly_usage": round(monthly_consumption, 2),
+            "estimated_cost": round(monthly_cost, 2),
+            "peak_demand": 0,  # Not in this API response
+            "last_updated": datetime.now().isoformat(),
+            "account_number": self._account_number,
+            "meter_number": self._meter_number,
+        }

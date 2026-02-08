@@ -1,0 +1,10 @@
+{
+  "domain": "dominion_energy",
+  "name": "Dominion Energy Virginia",
+  "codeowners": ["@yourusername"],
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/dominion_energy",
+  "requirements": ["aiohttp>=3.8.0"],
+  "iot_class": "cloud_polling",
+  "version": "1.0.0"
+}

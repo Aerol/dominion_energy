@@ -1,0 +1,167 @@
+"""Sensor platform for Dominion Energy Virginia integration."""
+from __future__ import annotations
+
+from datetime import datetime
+import logging
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfEnergy, UnitOfPower, CURRENCY_DOLLAR
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
+
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Dominion Energy sensors from a config entry."""
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    
+    sensors = [
+        DominionEnergyDailyUsageSensor(coordinator, config_entry),
+        DominionEnergyMonthlyUsageSensor(coordinator, config_entry),
+        DominionEnergyEstimatedCostSensor(coordinator, config_entry),
+        DominionEnergyAccountNumberSensor(coordinator, config_entry),
+        DominionEnergyMeterNumberSensor(coordinator, config_entry),
+    ]
+    
+    async_add_entities(sensors)
+
+
+class DominionEnergySensorBase(CoordinatorEntity, SensorEntity):
+    """Base class for Dominion Energy sensors."""
+
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_has_entity_name = True
+
+    @property
+    def device_info(self):
+        """Return device information about this sensor."""
+        return {
+            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
+            "name": "Dominion Energy Account",
+            "manufacturer": "Dominion Energy",
+            "model": "Energy Monitor",
+        }
+
+
+class DominionEnergyDailyUsageSensor(DominionEnergySensorBase):
+    """Sensor for daily energy usage."""
+
+    _attr_name = "Daily Usage"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_daily_usage"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("daily_usage")
+        return None
+
+
+class DominionEnergyMonthlyUsageSensor(DominionEnergySensorBase):
+    """Sensor for monthly energy usage."""
+
+    _attr_name = "Monthly Usage"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_monthly_usage"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("monthly_usage")
+        return None
+
+
+class DominionEnergyEstimatedCostSensor(DominionEnergySensorBase):
+    """Sensor for estimated energy cost."""
+
+    _attr_name = "Estimated Cost"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_estimated_cost"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("estimated_cost")
+        return None
+
+
+class DominionEnergyAccountNumberSensor(DominionEnergySensorBase):
+    """Sensor for account number."""
+
+    _attr_name = "Account Number"
+    _attr_icon = "mdi:account"
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_account_number"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("account_number")
+        return None
+
+
+class DominionEnergyMeterNumberSensor(DominionEnergySensorBase):
+    """Sensor for meter number."""
+
+    _attr_name = "Meter Number"
+    _attr_icon = "mdi:counter"
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_meter_number"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("meter_number")
+        return None

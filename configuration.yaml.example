@@ -1,0 +1,70 @@
+# Example Home Assistant configuration for Dominion Energy Virginia integration
+
+# Basic configuration is done through the UI, but you can customize logging:
+logger:
+  default: info
+  logs:
+    custom_components.dominion_energy: debug
+
+# Optional: Create template sensors for additional calculations
+template:
+  - sensor:
+      # Calculate average hourly usage
+      - name: "Dominion Energy Hourly Average"
+        unit_of_measurement: "kWh"
+        state: >
+          {% set daily = states('sensor.dominion_energy_account_daily_usage') | float(0) %}
+          {{ (daily / 24) | round(2) }}
+      
+      # Calculate cost per kWh (approximate)
+      - name: "Dominion Energy Rate per kWh"
+        unit_of_measurement: "$/kWh"
+        state: >
+          {% set cost = states('sensor.dominion_energy_account_estimated_cost') | float(0) %}
+          {% set usage = states('sensor.dominion_energy_account_monthly_usage') | float(1) %}
+          {{ (cost / usage) | round(3) }}
+      
+      # Projected monthly cost based on current usage
+      - name: "Dominion Energy Projected Monthly Cost"
+        unit_of_measurement: "$"
+        state: >
+          {% set daily_avg = states('sensor.dominion_energy_account_daily_usage') | float(0) %}
+          {% set rate = states('sensor.dominion_energy_rate_per_kwh') | float(0.11) %}
+          {% set days_in_month = now().strftime('%d') | int %}
+          {% set total_days = (now().replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1) %}
+          {% set total_days = total_days.day %}
+          {% set projected_usage = (daily_avg / days_in_month) * total_days %}
+          {{ (projected_usage * rate) | round(2) }}
+
+# Optional: Create automations based on usage
+automation:
+  # Alert when usage is high
+  - alias: "High Energy Usage Alert"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.dominion_energy_account_current_usage
+        above: 5  # kW
+        for:
+          minutes: 30
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "High Energy Usage"
+          message: "Current usage is {{ states('sensor.dominion_energy_account_current_usage') }} kW"
+  
+  # Daily usage summary
+  - alias: "Daily Energy Summary"
+    trigger:
+      - platform: time
+        at: "21:00:00"
+    action:
+      - service: notify.mobile_app
+        data:
+          title: "Daily Energy Summary"
+          message: >
+            Today's usage: {{ states('sensor.dominion_energy_account_daily_usage') }} kWh
+            Estimated cost: ${{ states('sensor.dominion_energy_account_estimated_cost') }}
+
+# Optional: Add to energy dashboard
+# Go to Configuration → Energy
+# Add sensor.dominion_energy_account_daily_usage to "Grid consumption"
