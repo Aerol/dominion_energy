@@ -23,11 +23,22 @@ UPDATE_INTERVAL = timedelta(minutes=30)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Dominion Energy Virginia from a config entry."""
     
+    auth_method = entry.data.get("auth_method", "automatic")
+    
     api = DominionEnergyAPI(
-        username=entry.data["username"],
-        password=entry.data["password"],
+        username=entry.data.get("username", ""),
+        password=entry.data.get("password", ""),
         session=async_get_clientsession(hass)
     )
+    
+    # If using manual token, set it directly
+    if auth_method == "manual_token":
+        api._bearer_token = entry.data["manual_token"]
+        api._account_number = entry.data["account_number"]
+        api._meter_number = entry.data["meter_number"]
+        _LOGGER.info("Using manual token authentication for account %s", api._account_number)
+    else:
+        _LOGGER.info("Using automatic authentication")
     
     coordinator = DataUpdateCoordinator(
         hass,

@@ -20,3 +20,4 @@ BILLING_URL = f"{API_BASE_URL}/Service/api/1/bill/GetBillandInvoiceHistory"
 # Configuration
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
+CONF_MANUAL_TOKEN = "manual_token"

@@ -3,15 +3,32 @@
     "step": {
       "user": {
         "title": "Set up Dominion Energy Virginia",
-        "description": "Enter your Dominion Energy account credentials",
+        "description": "Choose your authentication method",
         "data": {
-          "username": "Username",
+          "auth_method": "Authentication Method"
+        }
+      },
+      "automatic": {
+        "title": "Automatic Login",
+        "description": "Enter your Dominion Energy credentials. Note: May fail due to bot detection.",
+        "data": {
+          "username": "Email",
           "password": "Password"
+        }
+      },
+      "manual_token": {
+        "title": "Manual Token",
+        "description": "Enter your manually extracted token and account details. See documentation for instructions.",
+        "data": {
+          "manual_token": "Bearer Token",
+          "account_number": "Account Number",
+          "meter_number": "Meter Number"
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to Dominion Energy. Please check your credentials.",
+      "invalid_token": "Invalid token or unable to fetch data. Please verify the token and account information.",
       "unknown": "An unexpected error occurred. Please try again."
     },
     "abort": {
