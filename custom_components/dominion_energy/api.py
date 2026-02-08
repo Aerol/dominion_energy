@@ -47,31 +47,33 @@ class DominionEnergyAPI:
         """Login to Dominion Energy via Gigya and obtain tokens."""
         try:
             # Step 1: Login to Gigya
-            # Note: riskContext parameter removed as it may cause issues
+            # Using minimal parameters to avoid bot detection
             login_data = {
                 "loginID": self.username,
                 "password": self.password,
                 "sessionExpiration": "3600",
-                "targetEnv": "jssdk",
-                "include": "profile,data,emails,subscriptions,preferences,id_token,groups,loginIDs,",
+                "include": "profile,data,emails,id_token",
                 "includeUserInfo": "true",
-                "loginMode": "standard",
-                "lang": "en",
                 "APIKey": GIGYA_API_KEY,
-                "source": "showScreenSet",
-                "sdk": "js_latest",
-                "authMode": "cookie",
-                "pageURL": "https://login.dominionenergy.com/CommonLogin?SelectedAppName=Electric",
-                "sdkBuild": "18435",
                 "format": "json",
             }
             
             _LOGGER.debug("Attempting Gigya login for user: %s", self.username)
             
+            # Add user agent to appear more like a browser
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Origin": "https://login.dominionenergy.com",
+                "Referer": "https://login.dominionenergy.com/",
+            }
+            
             async with self.session.post(
                 GIGYA_LOGIN_URL,
                 data=urlencode(login_data),
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
+                headers=headers
             ) as response:
                 # Gigya returns text/javascript, so we need to read as text first
                 text = await response.text()
@@ -86,16 +88,24 @@ class DominionEnergyAPI:
                 error_code = data.get("errorCode", 0)
                 status_reason = data.get("statusReason", "Unknown")
                 
-                if response.status != 200 or error_code != 0:
+                if error_code != 0:
                     _LOGGER.error(
-                        "Gigya login failed - Status: %s, Error Code: %s, Reason: %s",
-                        response.status, error_code, status_reason
+                        "Gigya login failed - Error Code: %s, Reason: %s",
+                        error_code, status_reason
                     )
                     # Log more details about the error
                     if "errorDetails" in data:
                         _LOGGER.error("Error details: %s", data["errorDetails"])
                     if "validationErrors" in data:
                         _LOGGER.error("Validation errors: %s", data["validationErrors"])
+                    
+                    # Error code 400006 is bot detection - provide helpful message
+                    if error_code == 400006:
+                        _LOGGER.error(
+                            "Gigya bot detection triggered. This integration may need browser "
+                            "fingerprinting to work properly. Consider using an alternative "
+                            "authentication method or contact the integration developer."
+                        )
                     return False
                 
                 self._gigya_id_token = data.get("id_token")
