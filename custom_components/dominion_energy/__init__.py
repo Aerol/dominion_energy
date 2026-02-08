@@ -78,14 +78,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
     # Register webhook for automatic token updates
-    webhook_register(
-        hass,
-        DOMAIN,
-        "Dominion Energy Token Update",
-        WEBHOOK_ID,
-        handle_webhook,
-    )
-    _LOGGER.info("Registered webhook: /api/webhook/%s", WEBHOOK_ID)
+    try:
+        webhook_register(
+            hass,
+            DOMAIN,
+            "Dominion Energy Token Update",
+            WEBHOOK_ID,
+            handle_webhook,
+        )
+        _LOGGER.info("Registered webhook: /api/webhook/%s", WEBHOOK_ID)
+    except Exception as err:
+        _LOGGER.warning("Failed to register webhook (non-critical): %s", err)
     
     return True
 
@@ -145,10 +148,14 @@ async def handle_webhook(hass: HomeAssistant, webhook_id: str, request):
                     _LOGGER.info("Triggered data refresh after token update")
         
         # Send persistent notification to user
-        hass.components.persistent_notification.async_create(
-            f"Dominion Energy token updated automatically at {data.get('timestamp', 'unknown time')}",
-            title="Dominion Energy Token Updated",
-            notification_id="dominion_energy_token_update"
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "message": f"Dominion Energy token updated automatically at {data.get('timestamp', 'unknown time')}",
+                "title": "Dominion Energy Token Updated",
+                "notification_id": "dominion_energy_token_update"
+            }
         )
         
         return web.Response(status=200, text="Token updated successfully")
