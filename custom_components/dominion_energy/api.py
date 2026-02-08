@@ -47,6 +47,7 @@ class DominionEnergyAPI:
         """Login to Dominion Energy via Gigya and obtain tokens."""
         try:
             # Step 1: Login to Gigya
+            # Note: riskContext parameter removed as it may cause issues
             login_data = {
                 "loginID": self.username,
                 "password": self.password,
@@ -61,28 +62,40 @@ class DominionEnergyAPI:
                 "sdk": "js_latest",
                 "authMode": "cookie",
                 "pageURL": "https://login.dominionenergy.com/CommonLogin?SelectedAppName=Electric",
+                "sdkBuild": "18435",
                 "format": "json",
             }
+            
+            _LOGGER.debug("Attempting Gigya login for user: %s", self.username)
             
             async with self.session.post(
                 GIGYA_LOGIN_URL,
                 data=urlencode(login_data),
                 headers={"Content-Type": "application/x-www-form-urlencoded"}
             ) as response:
-                if response.status != 200:
-                    _LOGGER.error("Gigya login failed with status %s", response.status)
-                    return False
-                
                 # Gigya returns text/javascript, so we need to read as text first
                 text = await response.text()
+                _LOGGER.debug("Gigya response status: %s", response.status)
+                
                 try:
                     data = json.loads(text)
                 except json.JSONDecodeError as err:
-                    _LOGGER.error("Failed to parse Gigya response: %s", err)
+                    _LOGGER.error("Failed to parse Gigya response: %s. Response text: %s", err, text[:200])
                     return False
                 
-                if data.get("errorCode", 0) != 0:
-                    _LOGGER.error("Gigya login error: %s", data.get("statusReason"))
+                error_code = data.get("errorCode", 0)
+                status_reason = data.get("statusReason", "Unknown")
+                
+                if response.status != 200 or error_code != 0:
+                    _LOGGER.error(
+                        "Gigya login failed - Status: %s, Error Code: %s, Reason: %s",
+                        response.status, error_code, status_reason
+                    )
+                    # Log more details about the error
+                    if "errorDetails" in data:
+                        _LOGGER.error("Error details: %s", data["errorDetails"])
+                    if "validationErrors" in data:
+                        _LOGGER.error("Validation errors: %s", data["validationErrors"])
                     return False
                 
                 self._gigya_id_token = data.get("id_token")
