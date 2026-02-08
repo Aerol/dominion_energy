@@ -1,6 +1,7 @@
 """API Client for Dominion Energy Virginia."""
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any
@@ -72,7 +73,13 @@ class DominionEnergyAPI:
                     _LOGGER.error("Gigya login failed with status %s", response.status)
                     return False
                 
-                data = await response.json()
+                # Gigya returns text/javascript, so we need to read as text first
+                text = await response.text()
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError as err:
+                    _LOGGER.error("Failed to parse Gigya response: %s", err)
+                    return False
                 
                 if data.get("errorCode", 0) != 0:
                     _LOGGER.error("Gigya login error: %s", data.get("statusReason"))
