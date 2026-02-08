@@ -181,6 +181,8 @@ class DominionEnergyAPI:
 
     async def async_get_usage_data(self) -> dict[str, Any]:
         """Fetch energy usage data from Dominion Energy."""
+        _LOGGER.debug("async_get_usage_data called - bearer_token present: %s", bool(self._bearer_token))
+        
         # Only attempt login if we don't already have a bearer token (manual token mode)
         if not self._bearer_token:
             # Check if we have credentials for automatic login
@@ -193,7 +195,7 @@ class DominionEnergyAPI:
             if not login_success:
                 raise DominionEnergyAPIError("Authentication failed")
         else:
-            _LOGGER.debug("Using existing bearer token (manual token mode)")
+            _LOGGER.debug("Using existing bearer token (manual token mode) - token length: %d", len(self._bearer_token))
         
         try:
             # Get monthly usage data
