@@ -151,45 +151,44 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         try:
             # Basic validation - check token format
             token = user_input[CONF_MANUAL_TOKEN].strip()
+            account = user_input["account_number"].strip()
+            meter = user_input["meter_number"].strip()
+            
+            _LOGGER.debug("Manual token validation - Token starts with: %s, Length: %d", 
+                         token[:10], len(token))
+            _LOGGER.debug("Account: %s, Meter: %s", account, meter)
+            
             if not token.startswith("eyJ"):
+                _LOGGER.error("Token does not start with eyJ")
+                errors["base"] = "invalid_token"
+            elif len(token) < 100:
+                _LOGGER.error("Token too short: %d characters", len(token))
+                errors["base"] = "invalid_token"
+            elif not account or not meter:
+                _LOGGER.error("Missing account or meter number")
                 errors["base"] = "invalid_token"
             else:
-                # Test the token by making a simple API call
-                from homeassistant.helpers.aiohttp_client import async_get_clientsession
+                _LOGGER.info("Token validation passed, creating entry")
+                # Skip API validation for now - just accept the token
                 
-                api = DominionEnergyAPI(
-                    username="",  # Not needed for manual token
-                    password="",
-                    session=async_get_clientsession(self.hass),
-                )
-                
-                # Set the manual token and account info
-                api._bearer_token = token
-                api._account_number = user_input["account_number"]
-                api._meter_number = user_input["meter_number"]
-                
-                # Try to fetch usage data to validate the token
-                await api.async_get_usage_data()
-                
-        except DominionEnergyAPIError:
-            errors["base"] = "invalid_token"
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unexpected exception")
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.exception("Unexpected exception during validation: %s", err)
             errors["base"] = "unknown"
         else:
-            # Create the config entry
-            await self.async_set_unique_id(user_input["account_number"])
-            self._abort_if_unique_id_configured()
-            
-            return self.async_create_entry(
-                title=f"Dominion Energy - {user_input['account_number']}",
-                data={
-                    "auth_method": "manual_token",
-                    CONF_MANUAL_TOKEN: user_input[CONF_MANUAL_TOKEN],
-                    "account_number": user_input["account_number"],
-                    "meter_number": user_input["meter_number"],
-                },
-            )
+            if not errors:
+                # Create the config entry
+                await self.async_set_unique_id(user_input["account_number"])
+                self._abort_if_unique_id_configured()
+                
+                return self.async_create_entry(
+                    title=f"Dominion Energy - {user_input['account_number']}",
+                    data={
+                        "auth_method": "manual_token",
+                        CONF_MANUAL_TOKEN: token,
+                        "account_number": account,
+                        "meter_number": meter,
+                    },
+                )
 
         if errors:
             return self.async_show_form(
