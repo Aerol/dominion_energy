@@ -42,10 +42,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             # Validate credentials by attempting to login
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+            
             api = DominionEnergyAPI(
                 username=user_input[CONF_USERNAME],
                 password=user_input[CONF_PASSWORD],
-                session=self.hass.helpers.aiohttp_client.async_get_clientsession(),
+                session=async_get_clientsession(self.hass),
             )
             
             await api.async_login()
