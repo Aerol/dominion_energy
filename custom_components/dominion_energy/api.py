@@ -243,7 +243,9 @@ class DominionEnergyAPI:
                     raise DominionEnergyAPIError(f"Failed to get usage data: {response.status}")
             
             # Also get today's hourly data
-            hourly_data = await self.async_get_hourly_usage(datetime.now())
+            # Temporarily disabled - causing authentication issues
+            hourly_data = []
+            # hourly_data = await self.async_get_hourly_usage(datetime.now())
             
             # Parse and combine the data
             return self._parse_usage_data(monthly_data, hourly_data)
