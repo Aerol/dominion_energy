@@ -36,13 +36,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if auth_method == "manual_token":
         token = entry.data.get("manual_token", "")
         account = entry.data.get("account_number", "")
+        customer = entry.data.get("customer_number", "")
         meter = entry.data.get("meter_number", "")
         
-        _LOGGER.debug("Manual token config - Token length: %d, Account: %s, Meter: %s", 
-                     len(token), account, meter)
+        _LOGGER.debug("Manual token config - Token length: %d, Account: %s, Customer: %s, Meter: %s", 
+                     len(token), account, customer, meter)
         
         api._bearer_token = token
         api._account_number = account
+        api._customer_number = customer
         api._meter_number = meter
         
         _LOGGER.info("Using manual token authentication for account %s (token set: %s)", 

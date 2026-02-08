@@ -162,8 +162,11 @@ class DominionEnergyAPI:
                 headers["accountNumber"] = masked_account
                 _LOGGER.debug("Added masked accountNumber header: %s", masked_account)
             
-            # Customer number is optional - if we don't have it, that's OK
-            # It will be populated from API responses if available
+            if self._customer_number:
+                # Mask customer number: show last 5 digits (e.g., *****16540)
+                masked_customer = f"*****{self._customer_number[-5:]}"
+                headers["customerNumber"] = masked_customer
+                _LOGGER.debug("Added masked customerNumber header: %s", masked_customer)
         
         return headers
 

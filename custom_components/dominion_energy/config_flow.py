@@ -40,6 +40,7 @@ STEP_MANUAL_TOKEN_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_MANUAL_TOKEN): cv.string,
         vol.Required("account_number"): cv.string,
+        vol.Required("customer_number"): cv.string,
         vol.Required("meter_number"): cv.string,
     }
 )
@@ -152,11 +153,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Basic validation - check token format
             token = user_input[CONF_MANUAL_TOKEN].strip()
             account = user_input["account_number"].strip()
+            customer = user_input["customer_number"].strip()
             meter = user_input["meter_number"].strip()
             
             _LOGGER.debug("Manual token validation - Token starts with: %s, Length: %d", 
                          token[:10], len(token))
-            _LOGGER.debug("Account: %s, Meter: %s", account, meter)
+            _LOGGER.debug("Account: %s, Customer: %s, Meter: %s", account, customer, meter)
             
             if not token.startswith("eyJ"):
                 _LOGGER.error("Token does not start with eyJ")
@@ -164,8 +166,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             elif len(token) < 100:
                 _LOGGER.error("Token too short: %d characters", len(token))
                 errors["base"] = "invalid_token"
-            elif not account or not meter:
-                _LOGGER.error("Missing account or meter number")
+            elif not account or not customer or not meter:
+                _LOGGER.error("Missing account, customer, or meter number")
                 errors["base"] = "invalid_token"
             else:
                 _LOGGER.info("Token validation passed, creating entry")
@@ -186,6 +188,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "auth_method": "manual_token",
                         CONF_MANUAL_TOKEN: token,
                         "account_number": account,
+                        "customer_number": customer,
                         "meter_number": meter,
                     },
                 )

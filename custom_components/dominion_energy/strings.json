@@ -22,6 +22,7 @@
         "data": {
           "manual_token": "Bearer Token",
           "account_number": "Account Number",
+          "customer_number": "Customer Number",
           "meter_number": "Meter Number"
         }
       }
