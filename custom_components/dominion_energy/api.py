@@ -164,22 +164,34 @@ class DominionEnergyAPI:
 
     async def async_get_usage_data(self) -> dict[str, Any]:
         """Fetch energy usage data from Dominion Energy."""
+        # Only attempt login if we don't already have a bearer token (manual token mode)
         if not self._bearer_token:
-            await self.async_login()
+            _LOGGER.debug("No bearer token found, attempting login")
+            login_success = await self.async_login()
+            if not login_success:
+                raise DominionEnergyAPIError("Authentication failed")
+        else:
+            _LOGGER.debug("Using existing bearer token (manual token mode)")
         
         try:
             # Get monthly usage data
             end_date = datetime.now()
             start_date = end_date - timedelta(days=365)  # Last year
             
+            if not self._account_number or not self._meter_number:
+                _LOGGER.error("Missing account number or meter number")
+                raise DominionEnergyAPIError("Account information not configured")
+            
             params = {
-                "AccountNumber": self._account_number or "",
-                "MeterNumber": self._meter_number or "",
+                "AccountNumber": self._account_number,
+                "MeterNumber": self._meter_number,
                 "From": start_date.strftime("%Y-%m-%d"),
                 "To": end_date.strftime("%Y-%m-%d"),
                 "Uom": "kWh",
                 "Periodicity": "MO",  # Monthly data
             }
+            
+            _LOGGER.debug("Fetching usage data for account %s", self._account_number)
             
             headers = self._get_headers(include_account=True)
             
