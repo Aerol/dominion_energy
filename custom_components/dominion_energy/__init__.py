@@ -103,6 +103,7 @@ async def handle_webhook(hass: HomeAssistant, webhook_id: str, request):
         account_number = data.get('account_number')
         customer_number = data.get('customer_number')
         meter_number = data.get('meter_number')
+        gigya_login_token = data.get('gigya_login_token')
         
         if not token:
             _LOGGER.error("Webhook received without token")
@@ -125,6 +126,9 @@ async def handle_webhook(hass: HomeAssistant, webhook_id: str, request):
                 new_data['customer_number'] = customer_number
             if meter_number:
                 new_data['meter_number'] = meter_number
+            if gigya_login_token:
+                new_data['gigya_login_token'] = gigya_login_token
+                _LOGGER.info("Saved Gigya login token (will enable automatic auth)")
             
             hass.config_entries.async_update_entry(entry, data=new_data)
             

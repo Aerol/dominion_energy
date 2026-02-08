@@ -31,11 +31,12 @@ class DominionEnergyAPIError(Exception):
 class DominionEnergyAPI:
     """API client for Dominion Energy Virginia."""
 
-    def __init__(self, username: str, password: str, session: aiohttp.ClientSession) -> None:
+    def __init__(self, username: str, password: str, session: aiohttp.ClientSession, gigya_login_token: str = None) -> None:
         """Initialize the API client."""
         self.username = username
         self.password = password
         self.session = session
+        self._gigya_login_token = gigya_login_token
         self._gigya_id_token = None
         self._gigya_uid = None
         self._bearer_token = None
@@ -43,8 +44,125 @@ class DominionEnergyAPI:
         self._customer_number = None
         self._meter_number = None
 
+    async def async_get_jwt_from_gigya_token(self) -> bool:
+        """Use Gigya login token to get a JWT without re-authenticating."""
+        try:
+            # Use accounts.getJWT with the login token
+            params = {
+                "login_token": self._gigya_login_token,
+                "fields": "profile,data,emails",
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "*/*",
+                "Origin": "https://login.dominionenergy.com",
+                "Referer": "https://login.dominionenergy.com/",
+            }
+            
+            # Try accounts.getJWT endpoint
+            async with self.session.get(
+                f"{GIGYA_LOGIN_URL.replace('accounts.login', 'accounts.getJWT')}",
+                params=params,
+                headers=headers,
+            ) as response:
+                response_text = await response.text()
+                _LOGGER.debug("Gigya getJWT response status: %s", response.status)
+                
+                try:
+                    gigya_response = json.loads(response_text)
+                except json.JSONDecodeError:
+                    _LOGGER.error("Failed to parse Gigya JWT response")
+                    return False
+                
+                if gigya_response.get("errorCode") == 0:
+                    # Success! Extract the ID token
+                    self._gigya_id_token = gigya_response.get("id_token")
+                    self._gigya_uid = gigya_response.get("UID")
+                    
+                    if self._gigya_id_token:
+                        _LOGGER.info("Successfully obtained JWT using Gigya login token")
+                        # Now exchange for Dominion token
+                        return await self._exchange_gigya_token_for_dominion_token()
+                
+                _LOGGER.error("Gigya getJWT failed - Error Code: %s", gigya_response.get("errorCode"))
+                return False
+                
+        except Exception as err:
+            _LOGGER.exception("Error using Gigya login token: %s", err)
+            return False
+
+    async def _exchange_gigya_token_for_dominion_token(self) -> bool:
+        """Exchange Gigya id_token for Dominion API bearer token."""
+        try:
+            # The Dominion API likely has an endpoint that accepts the Gigya id_token
+            # and returns their own JWT. Common endpoints:
+            # /UsermanagementAPI/api/1/Login/auth
+            # /api/auth/token
+            
+            headers = {
+                "Authorization": f"Bearer {self._gigya_id_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Origin": "https://myaccount.dominionenergy.com",
+                "Referer": "https://myaccount.dominionenergy.com/",
+            }
+            
+            # Try the login/auth endpoint
+            auth_url = "https://prodsvc-dominioncip.smartcmobile.com/UsermanagementAPI/api/1/Login/auth"
+            
+            async with self.session.post(
+                auth_url,
+                headers=headers,
+                json={"idToken": self._gigya_id_token}
+            ) as response:
+                _LOGGER.debug("Token exchange response status: %s", response.status)
+                
+                if response.status == 200:
+                    data = await response.json()
+                    # The response might contain the bearer token
+                    # Check for common field names
+                    token = (
+                        data.get("token") or
+                        data.get("accessToken") or
+                        data.get("access_token") or
+                        data.get("bearerToken") or
+                        data.get("jwt")
+                    )
+                    
+                    if token:
+                        self._bearer_token = token
+                        _LOGGER.info("Successfully exchanged Gigya token for Dominion token")
+                        return True
+                    else:
+                        _LOGGER.warning("Token exchange succeeded but no token found in response: %s", data)
+                else:
+                    error_text = await response.text()
+                    _LOGGER.error("Token exchange failed: %s - %s", response.status, error_text[:200])
+            
+            # Fallback: Just use the Gigya id_token (probably won't work)
+            _LOGGER.warning("Using Gigya id_token as bearer token (may not work)")
+            self._bearer_token = self._gigya_id_token
+            return True
+            
+        except Exception as err:
+            _LOGGER.exception("Error exchanging tokens: %s", err)
+            # Fallback
+            self._bearer_token = self._gigya_id_token
+            return True
+
     async def async_login(self) -> bool:
         """Login to Dominion Energy via Gigya and obtain tokens."""
+        # If we have a Gigya login token, try to use it first
+        if self._gigya_login_token:
+            _LOGGER.debug("Attempting to get JWT using Gigya login token")
+            if await self.async_get_jwt_from_gigya_token():
+                return True
+            _LOGGER.warning("Failed to use Gigya login token, falling back to password login")
+        
         try:
             # Step 1: Login to Gigya
             # Using minimal parameters to avoid bot detection
@@ -116,9 +234,7 @@ class DominionEnergyAPI:
                     return False
             
             # Step 2: Exchange Gigya token for Dominion bearer token
-            # The bearer token appears to be generated client-side or returned in a way we couldn't capture
-            # For now, we'll use the Gigya id_token as the bearer token
-            self._bearer_token = self._gigya_id_token
+            await self._exchange_gigya_token_for_dominion_token()
             
             # Step 3: Get account information
             await self._get_account_info()
