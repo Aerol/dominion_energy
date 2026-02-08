@@ -79,7 +79,7 @@ class DominionEnergyCurrentHourUsageSensor(DominionEnergySensorBase):
     @property
     def unique_id(self) -> str:
         """Return unique ID for this sensor."""
-        return f"{self._config_entry.entry_id}_last_hour_usage"
+        return f"{self._config_entry.entry_id}_hourly_usage_v2"
 
     @property
     def native_value(self):
