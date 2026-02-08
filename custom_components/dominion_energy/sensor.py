@@ -32,6 +32,7 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     
     sensors = [
+        DominionEnergyCurrentHourUsageSensor(coordinator, config_entry),
         DominionEnergyDailyUsageSensor(coordinator, config_entry),
         DominionEnergyMonthlyUsageSensor(coordinator, config_entry),
         DominionEnergyEstimatedCostSensor(coordinator, config_entry),
@@ -64,6 +65,27 @@ class DominionEnergySensorBase(CoordinatorEntity, SensorEntity):
             "manufacturer": "Dominion Energy",
             "model": "Energy Monitor",
         }
+
+
+class DominionEnergyCurrentHourUsageSensor(DominionEnergySensorBase):
+    """Sensor for current hour energy usage."""
+
+    _attr_name = "Current Hour Usage"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_current_hour_usage"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("current_hour_usage")
+        return None
 
 
 class DominionEnergyDailyUsageSensor(DominionEnergySensorBase):

@@ -223,8 +223,7 @@ class DominionEnergyAPI:
                     return await self.async_get_usage_data()
                 
                 if response.status == 200:
-                    data = await response.json()
-                    return self._parse_usage_data(data)
+                    monthly_data = await response.json()
                 else:
                     # Log the full error response
                     error_text = await response.text()
@@ -235,6 +234,12 @@ class DominionEnergyAPI:
                         error_text[:500]
                     )
                     raise DominionEnergyAPIError(f"Failed to get usage data: {response.status}")
+            
+            # Also get today's hourly data
+            hourly_data = await self.async_get_hourly_usage(datetime.now())
+            
+            # Parse and combine the data
+            return self._parse_usage_data(monthly_data, hourly_data)
                     
         except aiohttp.ClientError as err:
             _LOGGER.error("Error fetching usage data: %s", err)
@@ -260,7 +265,11 @@ class DominionEnergyAPI:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("status", {}).get("type") == "success":
-                        return data.get("data", {}).get("electricUsages", [])
+                        hourly_usages = data.get("data", {}).get("electricUsages", [])
+                        _LOGGER.debug("Retrieved %d hourly readings", len(hourly_usages))
+                        return hourly_usages
+                else:
+                    _LOGGER.warning("Failed to get hourly usage: %s", response.status)
                 return []
                 
         except Exception as err:
@@ -299,20 +308,10 @@ class DominionEnergyAPI:
             _LOGGER.warning("Error fetching billing info: %s", err)
             return None
 
-    def _parse_usage_data(self, raw_data: dict) -> dict[str, Any]:
+    def _parse_usage_data(self, raw_data: dict, hourly_data: list[dict] = None) -> dict[str, Any]:
         """Parse the raw API response into usable data."""
         result = raw_data.get("Result", {})
         usages = result.get("electricUsages", [])
-        
-        if not usages:
-            return {
-                "current_usage": 0,
-                "daily_usage": 0,
-                "monthly_usage": 0,
-                "estimated_cost": 0,
-                "peak_demand": 0,
-                "last_updated": datetime.now().isoformat(),
-            }
         
         # Extract account and meter info from first record
         if usages and not self._account_number:
@@ -330,8 +329,23 @@ class DominionEnergyAPI:
         days_in_period = 30  # Approximate
         daily_usage = monthly_consumption / days_in_period if monthly_consumption > 0 else 0
         
+        # Get current hour usage from hourly data
+        current_hour_usage = 0
+        if hourly_data:
+            # Get the most recent hour
+            current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+            for reading in hourly_data:
+                try:
+                    # Parse the date string "2/6/2026 12:00:00 AM"
+                    reading_date = datetime.strptime(reading.get("readDate", ""), "%m/%d/%Y %I:%M:%S %p")
+                    if reading_date.hour == current_hour.hour:
+                        current_hour_usage = float(reading.get("consumption", 0))
+                        break
+                except (ValueError, AttributeError):
+                    continue
+        
         return {
-            "current_usage": 0,  # Not available in monthly data
+            "current_hour_usage": round(current_hour_usage, 2),
             "daily_usage": round(daily_usage, 2),
             "monthly_usage": round(monthly_consumption, 2),
             "estimated_cost": round(monthly_cost, 2),
