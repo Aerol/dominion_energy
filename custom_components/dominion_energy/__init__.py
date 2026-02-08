@@ -24,6 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Dominion Energy Virginia from a config entry."""
     
     auth_method = entry.data.get("auth_method", "automatic")
+    _LOGGER.info("Setting up Dominion Energy integration with auth_method: %s", auth_method)
     
     api = DominionEnergyAPI(
         username=entry.data.get("username", ""),
@@ -33,10 +34,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # If using manual token, set it directly
     if auth_method == "manual_token":
-        api._bearer_token = entry.data["manual_token"]
-        api._account_number = entry.data["account_number"]
-        api._meter_number = entry.data["meter_number"]
-        _LOGGER.info("Using manual token authentication for account %s", api._account_number)
+        token = entry.data.get("manual_token", "")
+        account = entry.data.get("account_number", "")
+        meter = entry.data.get("meter_number", "")
+        
+        _LOGGER.debug("Manual token config - Token length: %d, Account: %s, Meter: %s", 
+                     len(token), account, meter)
+        
+        api._bearer_token = token
+        api._account_number = account
+        api._meter_number = meter
+        
+        _LOGGER.info("Using manual token authentication for account %s (token set: %s)", 
+                    api._account_number, bool(api._bearer_token))
     else:
         _LOGGER.info("Using automatic authentication")
     
@@ -49,7 +59,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     
     # Fetch initial data
+    _LOGGER.debug("Performing initial data refresh...")
     await coordinator.async_config_entry_first_refresh()
+    _LOGGER.debug("Initial refresh complete")
     
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
