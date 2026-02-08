@@ -1,0 +1,7 @@
+{
+  "name": "Dominion Energy Virginia",
+  "render_readme": true,
+  "domains": ["sensor"],
+  "iot_class": "Cloud Polling",
+  "homeassistant": "2024.1.0"
+}
