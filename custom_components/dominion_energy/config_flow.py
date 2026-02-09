@@ -66,7 +66,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step - choose auth method."""
         if user_input is None:
             return self.async_show_form(
-                step_id="user", 
+                step_id="user",
                 data_schema=STEP_AUTH_METHOD_SCHEMA,
                 description_placeholders={
                     "manual_token_instructions": "See WORKAROUND_MANUAL_TOKEN.md for instructions on extracting your token"
@@ -74,7 +74,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         self.auth_method = user_input["auth_method"]
-        
+
         if self.auth_method == "automatic":
             return await self.async_step_automatic()
         else:
@@ -86,7 +86,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle automatic authentication with username/password."""
         if user_input is None:
             return self.async_show_form(
-                step_id="automatic", 
+                step_id="automatic",
                 data_schema=STEP_USER_DATA_SCHEMA,
                 description_placeholders={
                     "warning": "Automatic login with 2FA support"
@@ -94,27 +94,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         errors = {}
+        self.username = user_input[CONF_USERNAME].strip()
+        self.password = user_input[CONF_PASSWORD]
+
+        self.api = DominionEnergyAPI(
+            username=self.username,
+            password=self.password,
+            session=async_get_clientsession(self.hass),
+        )
 
         try:
-            # Store credentials
-            self.username = user_input[CONF_USERNAME].strip()
-            self.password = user_input[CONF_PASSWORD]
-            
-            # Validate credentials by attempting to login
-            from homeassistant.helpers.aiohttp_client import async_get_clientsession
-            
-            self.api = DominionEnergyAPI(
-                username=self.username,
-                password=self.password,
-                session=async_get_clientsession(self.hass),
-            )
-            
             await self.api.async_login()
-            
-            # Login succeeded without 2FA - create entry
+
             await self.async_set_unique_id(self.username)
             self._abort_if_unique_id_configured()
-            
+
             return self.async_create_entry(
                 title=f"Dominion Energy - {self.username}",
                 data={
@@ -123,30 +117,34 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_PASSWORD: self.password,
                 },
             )
-            
+
         except DominionEnergyAPIError as e:
             error_str = str(e)
-            
-            # Check if this is a 2FA required error
+
             if error_str.startswith("2FA_REQUIRED:"):
-                # Extract reg_token from error message
                 self.reg_token = error_str.split(":", 1)[1]
-                _LOGGER.info("2FA required, moving to 2FA step")
+                _LOGGER.info("2FA required, sending SMS code now")
                 
-                # Move to 2FA step
-                return await self.async_step_2fa_code()
+                # Send SMS code BEFORE showing the form
+                sms_sent = await self.api.send_2fa_sms(self.reg_token)
+                
+                if not sms_sent:
+                    _LOGGER.error("Failed to send SMS code")
+                    errors["base"] = "cannot_connect"
+                else:
+                    # SMS sent successfully, now show the form
+                    return await self.async_step_2fa_code()
             else:
-                # Other authentication error
                 _LOGGER.error("Authentication failed: %s", error_str)
                 errors["base"] = "cannot_connect"
-                
-        except Exception:  # pylint: disable=broad-except
+
+        except Exception:
             _LOGGER.exception("Unexpected exception")
             errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="automatic", 
-            data_schema=STEP_USER_DATA_SCHEMA, 
+            step_id="automatic",
+            data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors
         )
 
@@ -172,16 +170,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         try:
-            # Basic validation - check token format
             token = user_input[CONF_MANUAL_TOKEN].strip()
             account = user_input["account_number"].strip()
             customer = user_input["customer_number"].strip()
             meter = user_input["meter_number"].strip()
-            
-            _LOGGER.debug("Manual token validation - Token starts with: %s, Length: %d", 
+
+            _LOGGER.debug("Manual token validation - Token starts with: %s, Length: %d",
                          token[:10], len(token))
             _LOGGER.debug("Account: %s, Customer: %s, Meter: %s", account, customer, meter)
-            
+
             if not token.startswith("eyJ"):
                 _LOGGER.error("Token does not start with eyJ")
                 errors["base"] = "invalid_token"
@@ -193,17 +190,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_token"
             else:
                 _LOGGER.info("Token validation passed, creating entry")
-                # Skip API validation for now - just accept the token
-                
-        except Exception as err:  # pylint: disable=broad-except
+
+        except Exception as err:
             _LOGGER.exception("Unexpected exception during validation: %s", err)
             errors["base"] = "unknown"
         else:
             if not errors:
-                # Create the config entry
                 await self.async_set_unique_id(user_input["account_number"])
                 self._abort_if_unique_id_configured()
-                
+
                 return self.async_create_entry(
                     title=f"Dominion Energy - {user_input['account_number']}",
                     data={
@@ -226,7 +221,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="manual_token",
             data_schema=STEP_MANUAL_TOKEN_SCHEMA
         )
-    
+
     async def async_step_2fa_code(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -241,27 +236,25 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "info": "A verification code has been sent to your registered phone. Enter the 6-digit code below."
                 }
             )
-        
+
         errors = {}
-        
+
         try:
             code = user_input["2fa_code"].strip()
-            
+
             _LOGGER.info("Completing 2FA with code")
-            
-            # Complete 2FA with the code
+
             success = await self.api.complete_2fa_login(self.reg_token, code)
-            
+
             if not success:
                 _LOGGER.error("2FA completion failed")
                 errors["base"] = "invalid_2fa_code"
             else:
-                # 2FA successful! Create entry
                 await self.async_set_unique_id(self.username)
                 self._abort_if_unique_id_configured()
-                
+
                 _LOGGER.info("2FA successful, creating config entry")
-                
+
                 return self.async_create_entry(
                     title=f"Dominion Energy - {self.username}",
                     data={
@@ -270,11 +263,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: self.password,
                     },
                 )
-        
-        except Exception as err:  # pylint: disable=broad-except
+
+        except Exception as err:
             _LOGGER.exception("Error during 2FA: %s", err)
             errors["base"] = "unknown"
-        
+
         return self.async_show_form(
             step_id="2fa_code",
             data_schema=vol.Schema({
@@ -282,4 +275,3 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
             errors=errors
         )
-

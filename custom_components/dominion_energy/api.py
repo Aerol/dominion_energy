@@ -252,6 +252,74 @@ class DominionEnergyAPI:
             _LOGGER.error("Error during login: %s", err)
             raise DominionEnergyAPIError(f"Login failed: {err}") from err
     
+    async def send_2fa_sms(self, reg_token: str) -> bool:
+        """Send 2FA SMS code (called before showing the form to user)."""
+        try:
+            _LOGGER.info("Initiating 2FA SMS send")
+            
+            # Step 1: Initialize phone 2FA
+            init_url = "https://auth.dominionenergy.com/accounts.tfa.initTFA"
+            params = {
+                "provider": "gigyaPhone",
+                "mode": "verify",
+                "regToken": reg_token,
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            async with self.session.get(init_url, params=params) as response:
+                init_data = await response.json()
+                if init_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to init phone 2FA: %s", init_data)
+                    return False
+                
+                self._gigya_assertion = init_data.get("gigyaAssertion")
+                _LOGGER.info("Phone 2FA initialized")
+            
+            # Step 2: Get registered phones
+            phones_url = "https://auth.dominionenergy.com/accounts.tfa.phone.getRegisteredPhoneNumbers"
+            params = {"gigyaAssertion": self._gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
+            
+            async with self.session.get(phones_url, params=params) as response:
+                phones_data = await response.json()
+                if phones_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to get phones: %s", phones_data)
+                    return False
+                
+                phones = phones_data.get("phones", [])
+                if not phones:
+                    _LOGGER.error("No registered phone numbers found")
+                    return False
+                
+                self._phone_id = phones[0]["id"]
+                obfuscated_number = phones[0].get("obfuscated", "unknown")
+                _LOGGER.info("Found registered phone: %s", obfuscated_number)
+            
+            # Step 3: Send SMS code
+            send_url = "https://auth.dominionenergy.com/accounts.tfa.phone.sendVerificationCode"
+            params = {
+                "gigyaAssertion": self._gigya_assertion,
+                "phoneID": self._phone_id,
+                "method": "sms",
+                "lang": "en",
+                "regToken": reg_token,
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            async with self.session.get(send_url, params=params) as response:
+                send_data = await response.json()
+                if send_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to send SMS: %s", send_data)
+                    return False
+                
+                _LOGGER.info("✅ SMS code sent to %s", obfuscated_number)
+                return True
+                
+        except Exception as err:
+            _LOGGER.exception("Error sending 2FA SMS: %s", err)
+            return False
+    
     async def complete_2fa_login(self, reg_token: str, code: str) -> bool:
         """Complete 2FA authentication with user-provided code."""
         try:
