@@ -43,6 +43,31 @@ class DominionEnergyAPI:
         self._account_number = None
         self._customer_number = None
         self._meter_number = None
+        # Gigya cookies for device fingerprinting
+        self._gigya_cookies = {
+            'gmid': None,
+            'ucid': None,
+            'gig_bootstrap': None,
+        }
+    
+    def set_gigya_cookies(self, gmid: str, ucid: str, gig_bootstrap: str = None):
+        """
+        Set Gigya device fingerprint cookies extracted from browser.
+        
+        These cookies are required for 2FA to work without "Missing DeviceId" error.
+        Extract them from your browser after logging in once.
+        
+        Args:
+            gmid: Gigya Machine ID cookie value
+            ucid: User Client ID cookie value  
+            gig_bootstrap: Gigya bootstrap cookie (optional)
+        """
+        self._gigya_cookies['gmid'] = gmid
+        self._gigya_cookies['ucid'] = ucid
+        if gig_bootstrap:
+            self._gigya_cookies['gig_bootstrap'] = gig_bootstrap
+        
+        _LOGGER.info("Gigya cookies configured for device fingerprinting")
 
     async def async_get_jwt_from_gigya_token(self) -> bool:
         """Use Gigya login token to get a JWT without re-authenticating."""
@@ -257,6 +282,19 @@ class DominionEnergyAPI:
         try:
             _LOGGER.info("Initiating 2FA SMS send")
             
+            # Prepare cookies for Gigya API
+            cookies = {}
+            if self._gigya_cookies.get('gmid'):
+                cookies['gmid'] = self._gigya_cookies['gmid']
+            if self._gigya_cookies.get('ucid'):
+                cookies['ucid'] = self._gigya_cookies['ucid']
+            if self._gigya_cookies.get('gig_bootstrap'):
+                # Bootstrap cookie name includes the API key
+                cookies[f'gig_bootstrap_3_{GIGYA_API_KEY}'] = self._gigya_cookies['gig_bootstrap']
+            
+            if not cookies:
+                _LOGGER.warning("No Gigya cookies set - 2FA may fail with 'Missing DeviceId'")
+            
             # Step 1: Initialize phone 2FA
             init_url = "https://auth.dominionenergy.com/accounts.tfa.initTFA"
             params = {
@@ -267,7 +305,7 @@ class DominionEnergyAPI:
                 "format": "json",
             }
             
-            async with self.session.get(init_url, params=params) as response:
+            async with self.session.get(init_url, params=params, cookies=cookies) as response:
                 # Gigya returns text/javascript, so read as text first
                 text = await response.text()
                 try:

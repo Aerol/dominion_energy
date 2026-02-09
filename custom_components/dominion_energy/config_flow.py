@@ -32,6 +32,8 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,
+        vol.Optional("gigya_gmid", description="Gigya gmid cookie (optional, for 2FA)"): cv.string,
+        vol.Optional("gigya_ucid", description="Gigya ucid cookie (optional, for 2FA)"): cv.string,
     }
 )
 
@@ -102,6 +104,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             password=self.password,
             session=async_get_clientsession(self.hass),
         )
+        
+        # Set Gigya cookies if provided
+        gmid = user_input.get("gigya_gmid")
+        ucid = user_input.get("gigya_ucid")
+        if gmid and ucid:
+            self.api.set_gigya_cookies(gmid, ucid)
+            _LOGGER.info("Using provided Gigya cookies for 2FA")
 
         try:
             await self.api.async_login()
