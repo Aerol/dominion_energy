@@ -1,4 +1,4 @@
-"""API Client for Dominion Energy Virginia."""
+Q"""API Client for Dominion Energy Virginia."""
 from __future__ import annotations
 
 import json
@@ -292,7 +292,8 @@ class DominionEnergyAPI:
                     return False
                 
                 phone_id = phones[0]["id"]
-                _LOGGER.debug("Found registered phone")
+                obfuscated_number = phones[0].get("obfuscated", "unknown")
+                _LOGGER.info("Found registered phone: %s (ID: %s)", obfuscated_number, phone_id)
             
             # Step 3: Send SMS code
             send_url = "https://auth.dominionenergy.com/accounts.tfa.phone.sendVerificationCode"
@@ -312,7 +313,7 @@ class DominionEnergyAPI:
                     _LOGGER.error("Failed to send SMS: %s", send_data)
                     return False
                 
-                _LOGGER.info("SMS code sent")
+                _LOGGER.info("✅ SMS code sent to %s", obfuscated_number)
             
             # Step 4: Verify the code
             verify_url = "https://auth.dominionenergy.com/accounts.tfa.phone.completeVerification"
