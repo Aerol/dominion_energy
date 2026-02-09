@@ -122,7 +122,7 @@ class DominionEnergyAPI:
                 _LOGGER.debug("Token exchange response status: %s", response.status)
                 
                 if response.status == 200:
-                    data = await response.json()
+                    data = await response.json(content_type=None)
                     # The response might contain the bearer token
                     # Check for common field names
                     token = (
@@ -268,7 +268,14 @@ class DominionEnergyAPI:
             }
             
             async with self.session.get(init_url, params=params) as response:
-                init_data = await response.json()
+                # Gigya returns text/javascript, so read as text first
+                text = await response.text()
+                try:
+                    init_data = json.loads(text)
+                except json.JSONDecodeError as e:
+                    _LOGGER.error("Failed to parse init response: %s", e)
+                    return False
+                    
                 if init_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to init phone 2FA: %s", init_data)
                     return False
@@ -281,7 +288,10 @@ class DominionEnergyAPI:
             params = {"gigyaAssertion": self._gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
             
             async with self.session.get(phones_url, params=params) as response:
-                phones_data = await response.json()
+                text = await response.text()
+            async with self.session.get(phones_url, params=params) as response:
+                text = await response.text()
+                phones_data = json.loads(text)
                 if phones_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to get phones: %s", phones_data)
                     return False
@@ -308,7 +318,8 @@ class DominionEnergyAPI:
             }
             
             async with self.session.get(send_url, params=params) as response:
-                send_data = await response.json()
+                text = await response.text()
+                send_data = json.loads(text)
                 if send_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to send SMS: %s", send_data)
                     return False
@@ -336,7 +347,7 @@ class DominionEnergyAPI:
             }
             
             async with self.session.get(init_url, params=params) as response:
-                init_data = await response.json()
+                init_data = await response.json(content_type=None)
                 if init_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to init phone 2FA: %s", init_data)
                     return False
@@ -349,7 +360,7 @@ class DominionEnergyAPI:
             params = {"gigyaAssertion": gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
             
             async with self.session.get(phones_url, params=params) as response:
-                phones_data = await response.json()
+                phones_data = await response.json(content_type=None)
                 if phones_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to get phones: %s", phones_data)
                     return False
@@ -376,7 +387,7 @@ class DominionEnergyAPI:
             }
             
             async with self.session.get(send_url, params=params) as response:
-                send_data = await response.json()
+                send_data = await response.json(content_type=None)
                 if send_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to send SMS: %s", send_data)
                     return False
@@ -394,7 +405,7 @@ class DominionEnergyAPI:
             }
             
             async with self.session.get(verify_url, params=params) as response:
-                verify_data = await response.json()
+                verify_data = await response.json(content_type=None)
                 if verify_data.get("errorCode") != 0:
                     _LOGGER.error("2FA code verification failed: %s", verify_data)
                     return False
@@ -406,7 +417,7 @@ class DominionEnergyAPI:
             params = {"gigyaAssertion": gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
             
             async with self.session.get(finalize_url, params=params) as response:
-                finalize_data = await response.json()
+                finalize_data = await response.json(content_type=None)
                 if finalize_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to finalize 2FA: %s", finalize_data)
                     return False
@@ -418,7 +429,7 @@ class DominionEnergyAPI:
             params = {"regToken": reg_token, "APIKey": GIGYA_API_KEY, "format": "json"}
             
             async with self.session.get(reg_finalize_url, params=params) as response:
-                reg_data = await response.json()
+                reg_data = await response.json(content_type=None)
                 if reg_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to finalize registration: %s", reg_data)
                     return False
@@ -437,7 +448,7 @@ class DominionEnergyAPI:
             }
             
             async with self.session.post(account_url, data=urlencode(data_params)) as response:
-                account_data = await response.json()
+                account_data = await response.json(content_type=None)
                 if account_data.get("errorCode") != 0:
                     _LOGGER.error("Failed to get account info: %s", account_data)
                     return False
@@ -564,7 +575,7 @@ class DominionEnergyAPI:
                     return await self.async_get_usage_data()
                 
                 if response.status == 200:
-                    monthly_data = await response.json()
+                    monthly_data = await response.json(content_type=None)
                 else:
                     # Log the full error response
                     error_text = await response.text()
@@ -606,7 +617,7 @@ class DominionEnergyAPI:
                 params=params
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    data = await response.json(content_type=None)
                     if data.get("status", {}).get("type") == "success":
                         hourly_usages = data.get("data", {}).get("electricUsages", [])
                         _LOGGER.debug("Retrieved %d hourly readings", len(hourly_usages))
@@ -639,7 +650,7 @@ class DominionEnergyAPI:
                 params=params
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    data = await response.json(content_type=None)
                     if data.get("status", {}).get("type") == "success":
                         billing_data = data.get("data", {})
                         results = billing_data.get("zBillInvHeadtoItemNav", {}).get("results", [])
