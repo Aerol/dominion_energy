@@ -95,10 +95,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         errors = {}
 
-        try:
+        if user_input is not None:
             # Store credentials for 2FA step
-            self.username = user_input[CONF_USERNAME]
+            self.username = user_input[CONF_USERNAME].strip()
             self.password = user_input[CONF_PASSWORD]
+            
+            # Basic validation - check email format
+            if "@" not in self.username:
+                _LOGGER.error("Invalid email format: %s", self.username)
+                errors["base"] = "invalid_auth"
+                return self.async_show_form(
+                    step_id="automatic",
+                    data_schema=STEP_USER_DATA_SCHEMA,
+                    errors=errors,
+                    description_placeholders={
+                        "warning": "Username must be an email address"
+                    }
+                )
             
             # Validate credentials by attempting to login
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -127,20 +140,30 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
             except DominionEnergyAPIError as e:
                 error_str = str(e)
+                _LOGGER.debug("DominionEnergyAPIError caught: %s", error_str)
+                
                 if error_str.startswith("2FA_REQUIRED:"):
                     # Extract reg_token from error message
                     self.reg_token = error_str.split(":", 1)[1]
-                    _LOGGER.info("2FA required, moving to 2FA step")
+                    _LOGGER.info("2FA required, moving to 2FA step. RegToken: %s...", self.reg_token[:20])
                     
                     # Move to 2FA step
                     return await self.async_step_2fa_code()
                 else:
                     # Other authentication error
+                    _LOGGER.error("Authentication failed: %s", error_str)
                     errors["base"] = "cannot_connect"
             
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.exception("Unexpected exception: %s", err)
             errors["base"] = "unknown"
+        
+        if errors:
+            return self.async_show_form(
+                step_id="automatic", 
+                data_schema=STEP_USER_DATA_SCHEMA, 
+                errors=errors
+            )
 
         return self.async_show_form(
             step_id="automatic", 
