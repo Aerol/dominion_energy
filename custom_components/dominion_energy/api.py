@@ -1,4 +1,4 @@
-Q"""API Client for Dominion Energy Virginia."""
+"""API Client for Dominion Energy Virginia."""
 from __future__ import annotations
 
 import json
