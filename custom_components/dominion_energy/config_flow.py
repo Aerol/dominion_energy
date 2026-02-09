@@ -55,6 +55,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self.auth_method = None
         self.data = {}
+        self.api = None
+        self.reg_token = None
+        self.username = None
+        self.password = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -85,42 +89,58 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="automatic", 
                 data_schema=STEP_USER_DATA_SCHEMA,
                 description_placeholders={
-                    "warning": "Note: This may fail due to Gigya bot detection (error 400006)"
+                    "warning": "Automatic login with 2FA support"
                 }
             )
 
         errors = {}
 
         try:
+            # Store credentials for 2FA step
+            self.username = user_input[CONF_USERNAME]
+            self.password = user_input[CONF_PASSWORD]
+            
             # Validate credentials by attempting to login
             from homeassistant.helpers.aiohttp_client import async_get_clientsession
             
-            api = DominionEnergyAPI(
-                username=user_input[CONF_USERNAME],
-                password=user_input[CONF_PASSWORD],
+            self.api = DominionEnergyAPI(
+                username=self.username,
+                password=self.password,
                 session=async_get_clientsession(self.hass),
             )
             
-            await api.async_login()
+            try:
+                await self.api.async_login()
+                
+                # Login succeeded without 2FA - create entry
+                await self.async_set_unique_id(self.username)
+                self._abort_if_unique_id_configured()
+                
+                return self.async_create_entry(
+                    title=f"Dominion Energy - {self.username}",
+                    data={
+                        "auth_method": "automatic",
+                        CONF_USERNAME: self.username,
+                        CONF_PASSWORD: self.password,
+                    },
+                )
+                
+            except DominionEnergyAPIError as e:
+                error_str = str(e)
+                if error_str.startswith("2FA_REQUIRED:"):
+                    # Extract reg_token from error message
+                    self.reg_token = error_str.split(":", 1)[1]
+                    _LOGGER.info("2FA required, moving to 2FA step")
+                    
+                    # Move to 2FA step
+                    return await self.async_step_2fa_code()
+                else:
+                    # Other authentication error
+                    errors["base"] = "cannot_connect"
             
-        except DominionEnergyAPIError:
-            errors["base"] = "cannot_connect"
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Unexpected exception")
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.exception("Unexpected exception: %s", err)
             errors["base"] = "unknown"
-        else:
-            # Create the config entry
-            await self.async_set_unique_id(user_input[CONF_USERNAME])
-            self._abort_if_unique_id_configured()
-            
-            return self.async_create_entry(
-                title=f"Dominion Energy - {user_input[CONF_USERNAME]}",
-                data={
-                    "auth_method": "automatic",
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                    CONF_PASSWORD: user_input[CONF_PASSWORD],
-                },
-            )
 
         return self.async_show_form(
             step_id="automatic", 
@@ -203,4 +223,71 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="manual_token",
             data_schema=STEP_MANUAL_TOKEN_SCHEMA
+        )
+    
+    async def async_step_2fa_code(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle 2FA code entry."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="2fa_code",
+                data_schema=vol.Schema({
+                    vol.Required("2fa_code"): cv.string,
+                }),
+                description_placeholders={
+                    "info": "A verification code has been sent to your registered phone number. Please enter it below."
+                }
+            )
+        
+        errors = {}
+        
+        try:
+            code = user_input["2fa_code"].strip()
+            
+            _LOGGER.info("Attempting to complete 2FA with provided code")
+            
+            # Complete 2FA with the code
+            success = await self.api.complete_2fa_login(self.reg_token, code)
+            
+            if not success:
+                _LOGGER.error("2FA completion failed")
+                errors["base"] = "invalid_2fa_code"
+            else:
+                # 2FA successful! Create entry
+                await self.async_set_unique_id(self.username)
+                self._abort_if_unique_id_configured()
+                
+                _LOGGER.info("2FA successful, creating config entry")
+                
+                return self.async_create_entry(
+                    title=f"Dominion Energy - {self.username}",
+                    data={
+                        "auth_method": "automatic",
+                        CONF_USERNAME: self.username,
+                        CONF_PASSWORD: self.password,
+                    },
+                )
+        
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.exception("Error during 2FA code verification: %s", err)
+            errors["base"] = "unknown"
+        
+        if errors:
+            return self.async_show_form(
+                step_id="2fa_code",
+                data_schema=vol.Schema({
+                    vol.Required("2fa_code"): cv.string,
+                }),
+                errors=errors,
+                description_placeholders={
+                    "info": "Invalid code. Please check and try again."
+                }
+            )
+        
+        return self.async_show_form(
+            step_id="2fa_code",
+            data_schema=vol.Schema({
+                vol.Required("2fa_code"): cv.string,
+            })
         )

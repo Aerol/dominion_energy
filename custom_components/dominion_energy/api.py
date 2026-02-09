@@ -155,7 +155,7 @@ class DominionEnergyAPI:
             return True
 
     async def async_login(self) -> bool:
-        """Login to Dominion Energy via Gigya and obtain tokens."""
+        """Login to Dominion Energy via Gigya and obtain tokens with 2FA support."""
         # If we have a Gigya login token, try to use it first
         if self._gigya_login_token:
             _LOGGER.debug("Attempting to get JWT using Gigya login token")
@@ -165,11 +165,10 @@ class DominionEnergyAPI:
         
         try:
             # Step 1: Login to Gigya
-            # Using minimal parameters to avoid bot detection
             login_data = {
                 "loginID": self.username,
                 "password": self.password,
-                "sessionExpiration": "3600",
+                "sessionExpiration": "86400",  # 24 hours
                 "include": "profile,data,emails,id_token",
                 "includeUserInfo": "true",
                 "APIKey": GIGYA_API_KEY,
@@ -178,7 +177,6 @@ class DominionEnergyAPI:
             
             _LOGGER.debug("Attempting Gigya login for user: %s", self.username)
             
-            # Add user agent to appear more like a browser
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -193,7 +191,6 @@ class DominionEnergyAPI:
                 data=urlencode(login_data),
                 headers=headers
             ) as response:
-                # Gigya returns text/javascript, so we need to read as text first
                 text = await response.text()
                 _LOGGER.debug("Gigya response status: %s", response.status)
                 
@@ -204,28 +201,35 @@ class DominionEnergyAPI:
                     return False
                 
                 error_code = data.get("errorCode", 0)
-                status_reason = data.get("statusReason", "Unknown")
                 
-                if error_code != 0:
+                # Check for 2FA required
+                if error_code == 403101:
+                    _LOGGER.info("2FA required (error 403101)")
+                    reg_token = data.get("regToken")
+                    if not reg_token:
+                        _LOGGER.error("2FA required but no regToken received")
+                        return False
+                    
+                    # We can't complete 2FA in async_login - need user input
+                    # Raise special exception that config_flow can catch
+                    raise DominionEnergyAPIError(f"2FA_REQUIRED:{reg_token}")
+                
+                # Check for other errors
+                elif error_code != 0:
                     _LOGGER.error(
                         "Gigya login failed - Error Code: %s, Reason: %s",
-                        error_code, status_reason
+                        error_code, data.get("statusReason", "Unknown")
                     )
-                    # Log more details about the error
                     if "errorDetails" in data:
                         _LOGGER.error("Error details: %s", data["errorDetails"])
-                    if "validationErrors" in data:
-                        _LOGGER.error("Validation errors: %s", data["validationErrors"])
                     
-                    # Error code 400006 is bot detection - provide helpful message
                     if error_code == 400006:
                         _LOGGER.error(
-                            "Gigya bot detection triggered. This integration may need browser "
-                            "fingerprinting to work properly. Consider using an alternative "
-                            "authentication method or contact the integration developer."
+                            "Gigya bot detection triggered. Use manual token method instead."
                         )
                     return False
                 
+                # Login successful without 2FA
                 self._gigya_id_token = data.get("id_token")
                 self._gigya_uid = data.get("UID")
                 
@@ -233,17 +237,162 @@ class DominionEnergyAPI:
                     _LOGGER.error("Missing id_token or UID from Gigya response")
                     return False
             
-            # Step 2: Exchange Gigya token for Dominion bearer token
+            # Exchange Gigya token for Dominion bearer token
             await self._exchange_gigya_token_for_dominion_token()
             
-            # Step 3: Get account information
+            # Get account information
             await self._get_account_info()
             
             return True
                     
+        except DominionEnergyAPIError:
+            # Re-raise our own exceptions
+            raise
         except aiohttp.ClientError as err:
             _LOGGER.error("Error during login: %s", err)
             raise DominionEnergyAPIError(f"Login failed: {err}") from err
+    
+    async def complete_2fa_login(self, reg_token: str, code: str) -> bool:
+        """Complete 2FA authentication with user-provided code."""
+        try:
+            _LOGGER.info("Starting 2FA flow with provided code")
+            
+            # Step 1: Initialize phone 2FA
+            init_url = "https://auth.dominionenergy.com/accounts.tfa.initTFA"
+            params = {
+                "provider": "gigyaPhone",
+                "mode": "verify",
+                "regToken": reg_token,
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            async with self.session.get(init_url, params=params) as response:
+                init_data = await response.json()
+                if init_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to init phone 2FA: %s", init_data)
+                    return False
+                
+                gigya_assertion = init_data.get("gigyaAssertion")
+                _LOGGER.debug("Phone 2FA initialized")
+            
+            # Step 2: Get registered phones
+            phones_url = "https://auth.dominionenergy.com/accounts.tfa.phone.getRegisteredPhoneNumbers"
+            params = {"gigyaAssertion": gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
+            
+            async with self.session.get(phones_url, params=params) as response:
+                phones_data = await response.json()
+                if phones_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to get phones: %s", phones_data)
+                    return False
+                
+                phones = phones_data.get("phones", [])
+                if not phones:
+                    _LOGGER.error("No registered phone numbers found")
+                    return False
+                
+                phone_id = phones[0]["id"]
+                _LOGGER.debug("Found registered phone")
+            
+            # Step 3: Send SMS code
+            send_url = "https://auth.dominionenergy.com/accounts.tfa.phone.sendVerificationCode"
+            params = {
+                "gigyaAssertion": gigya_assertion,
+                "phoneID": phone_id,
+                "method": "sms",
+                "lang": "en",
+                "regToken": reg_token,
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            async with self.session.get(send_url, params=params) as response:
+                send_data = await response.json()
+                if send_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to send SMS: %s", send_data)
+                    return False
+                
+                _LOGGER.info("SMS code sent")
+            
+            # Step 4: Verify the code
+            verify_url = "https://auth.dominionenergy.com/accounts.tfa.phone.completeVerification"
+            params = {
+                "gigyaAssertion": gigya_assertion,
+                "vToken": code,
+                "regToken": reg_token,
+                "APIKey": GIGYA_API_KEY,
+                "format": "json",
+            }
+            
+            async with self.session.get(verify_url, params=params) as response:
+                verify_data = await response.json()
+                if verify_data.get("errorCode") != 0:
+                    _LOGGER.error("2FA code verification failed: %s", verify_data)
+                    return False
+                
+                _LOGGER.info("2FA code verified")
+            
+            # Step 5: Finalize 2FA
+            finalize_url = "https://auth.dominionenergy.com/accounts.tfa.finalizeTFA"
+            params = {"gigyaAssertion": gigya_assertion, "APIKey": GIGYA_API_KEY, "format": "json"}
+            
+            async with self.session.get(finalize_url, params=params) as response:
+                finalize_data = await response.json()
+                if finalize_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to finalize 2FA: %s", finalize_data)
+                    return False
+                
+                _LOGGER.info("2FA finalized")
+            
+            # Step 6: Finalize registration
+            reg_finalize_url = "https://auth.dominionenergy.com/accounts.finalizeRegistration"
+            params = {"regToken": reg_token, "APIKey": GIGYA_API_KEY, "format": "json"}
+            
+            async with self.session.get(reg_finalize_url, params=params) as response:
+                reg_data = await response.json()
+                if reg_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to finalize registration: %s", reg_data)
+                    return False
+                
+                _LOGGER.info("Registration finalized")
+            
+            # Step 7: Get account info with id_token
+            account_url = "https://auth.dominionenergy.com/accounts.getAccountInfo"
+            data_params = {
+                "include": "groups,profile,data,id_token",
+                "lang": "en",
+                "APIKey": GIGYA_API_KEY,
+                "sdk": "js_latest",
+                "authMode": "cookie",
+                "format": "json",
+            }
+            
+            async with self.session.post(account_url, data=urlencode(data_params)) as response:
+                account_data = await response.json()
+                if account_data.get("errorCode") != 0:
+                    _LOGGER.error("Failed to get account info: %s", account_data)
+                    return False
+                
+                self._gigya_id_token = account_data.get("id_token")
+                self._gigya_uid = account_data.get("UID")
+                
+                if not self._gigya_id_token:
+                    _LOGGER.error("No id_token in account info")
+                    return False
+                
+                _LOGGER.info("2FA flow complete, got id_token")
+            
+            # Exchange for Dominion token
+            await self._exchange_gigya_token_for_dominion_token()
+            
+            # Get account information
+            await self._get_account_info()
+            
+            return True
+                
+        except Exception as err:
+            _LOGGER.exception("Error completing 2FA: %s", err)
+            return False
 
     async def _get_account_info(self) -> None:
         """Fetch account and meter information."""
