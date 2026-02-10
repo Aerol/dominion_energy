@@ -75,8 +75,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.info("Tokens refreshed and saved")
 
         except TokenExpiredError:
-            _LOGGER.error("Tokens expired - re-authentication required")
-            return False
+            # Refresh token expired - try to re-authenticate with stored credentials
+            _LOGGER.warning("Refresh token expired, attempting automatic re-authentication")
+            
+            try:
+                # Re-authenticate using stored credentials and cookies
+                _LOGGER.info("Attempting login with stored credentials")
+                result = await api.async_login_with_credentials(username, password)
+                
+                if result.get("tfa_required"):
+                    # 2FA required but we can't prompt user during setup
+                    # Mark integration for reconfiguration
+                    _LOGGER.error("2FA required for re-authentication - please reconfigure integration")
+                    hass.components.persistent_notification.create(
+                        title="Dominion Energy - Re-authentication Required",
+                        message="Your session has expired and 2FA is required. Please delete and re-add the integration.",
+                        notification_id="dominion_energy_reauth"
+                    )
+                    return False
+                else:
+                    # Login successful, got new tokens
+                    tokens = await api._async_exchange_for_dominion_tokens()
+                    
+                    # Save new tokens
+                    hass.config_entries.async_update_entry(
+                        entry,
+                        data={
+                            **entry.data,
+                            "access_token": tokens.access_token,
+                            "refresh_token": tokens.refresh_token,
+                            "cookies": api.export_cookies(),
+                        },
+                    )
+                    _LOGGER.info("Re-authentication successful, tokens saved")
+                    
+            except Exception as e:
+                _LOGGER.error("Re-authentication failed: %s", e)
+                hass.components.persistent_notification.create(
+                    title="Dominion Energy - Re-authentication Failed",
+                    message=f"Automatic re-authentication failed: {e}. Please delete and re-add the integration.",
+                    notification_id="dominion_energy_reauth"
+                )
+                return False
+                
         except DominionEnergyAPIError as e:
             _LOGGER.error("Failed to validate token: %s", e)
             return False
