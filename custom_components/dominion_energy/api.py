@@ -899,34 +899,18 @@ class DominionEnergyAPI:
                         raise DominionEnergyAPIError(f"Failed to get usage after refresh: {retry_response.status} - {text}")
                     
                     # Process the retry response
-                    content = await retry_response.text()
-                    _LOGGER.error("DEBUG: Retry response first 500 chars: %s", content[:500])
-                    
-                    try:
-                        import json as json_lib
-                        data = json_lib.loads(content)
-                        _LOGGER.error("DEBUG: Successfully parsed retry response as JSON")
-                        return data
-                    except:
-                        _LOGGER.error("DEBUG: Retry response not JSON")
-                        return {"raw_data": content}
+                    content = await retry_response.read()
+                    _LOGGER.error("DEBUG: Retry response got %d bytes", len(content))
+                    return {"raw_excel": content}
             
             if response.status != 200:
                 text = await response.text()
                 _LOGGER.error("DEBUG: Usage response body: %s", text[:500])
                 raise DominionEnergyAPIError(f"Failed to get usage: {response.status} - {text}")
             
-            # Try to get as text first to see what we got
-            content = await response.text()
-            _LOGGER.error("DEBUG: Got response, first 500 chars: %s", content[:500])
+            # Get as bytes (it's Excel regardless of what we asked for)
+            content = await response.read()
+            _LOGGER.error("DEBUG: Got response, %d bytes", len(content))
             
-            # Try to parse as JSON
-            try:
-                import json as json_lib
-                data = json_lib.loads(content)
-                _LOGGER.error("DEBUG: Successfully parsed as JSON")
-                return data
-            except:
-                _LOGGER.error("DEBUG: Not JSON, might be Excel/CSV")
-                # Return raw content for parsing
-                return {"raw_data": content}
+            # Return as raw Excel data
+            return {"raw_excel": content}

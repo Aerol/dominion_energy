@@ -172,43 +172,66 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                 "estimated_cost": 0,
             }
             
-            # Check if we got JSON data
-            if raw_data and isinstance(raw_data, dict) and "raw_data" not in raw_data:
-                _LOGGER.error("DEBUG: Processing JSON response")
-                _LOGGER.error("DEBUG: Response structure: %s", raw_data)
+            # Check if we got Excel data
+            if raw_data and isinstance(raw_data, dict) and "raw_excel" in raw_data:
+                _LOGGER.error("DEBUG: Processing Excel response")
                 
-                # Try to find the data section
-                data_section = raw_data.get("data", raw_data)
-                
-                if "intervals" in data_section or "usage" in data_section:
-                    # Standard format
-                    intervals = data_section.get("intervals", data_section.get("usage", []))
-                    _LOGGER.error("DEBUG: Found %d intervals/usage items", len(intervals))
+                try:
+                    from openpyxl import load_workbook
+                    from io import BytesIO
                     
-                    if intervals:
-                        _LOGGER.error("DEBUG: First interval: %s", intervals[0])
-                        _LOGGER.error("DEBUG: Last interval: %s", intervals[-1])
+                    excel_bytes = raw_data["raw_excel"]
+                    _LOGGER.error("DEBUG: Excel data size: %d bytes", len(excel_bytes))
+                    
+                    # Load Excel file
+                    wb = load_workbook(BytesIO(excel_bytes))
+                    ws = wb.active
+                    
+                    _LOGGER.error("DEBUG: Excel loaded, %d rows", ws.max_row)
+                    
+                    # Excel format from dompower: 
+                    # Row 1: Headers
+                    # Row 2+: Data with date in column C, then 48 half-hour readings
+                    
+                    total_usage = 0
+                    last_value = 0
+                    last_time = None
+                    reading_count = 0
+                    
+                    # Skip header row, iterate data rows
+                    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                        if not row or len(row) < 4:
+                            continue
                         
-                        total = 0
-                        for item in intervals:
-                            val = item.get("value", item.get("consumption", item.get("usage", 0)))
-                            try:
-                                total += float(val)
-                            except (ValueError, TypeError):
-                                pass
+                        # Row format: Account, Recorder ID, Date, 12:00 AM, 12:30 AM, 1:00 AM...
+                        date_str = row[2]  # Column C
                         
-                        last = intervals[-1]
-                        parsed_data["last_hour_usage"] = float(last.get("value", last.get("consumption", last.get("usage", 0))))
-                        parsed_data["last_hour_reading_time"] = last.get("timestamp", last.get("date", last.get("readingDateTime")))
-                        parsed_data["daily_usage"] = total
-                        parsed_data["monthly_usage"] = total
-                        parsed_data["estimated_cost"] = round(total * 0.12, 2)
-                        
-                        _LOGGER.info("Parsed %d usage readings, total: %.2f kWh", len(intervals), total)
-                else:
-                    _LOGGER.error("DEBUG: Unknown JSON structure, keys: %s", list(data_section.keys()))
+                        # Iterate through the 48 half-hour columns (columns D onwards)
+                        for col_idx in range(3, min(len(row), 51)):  # 48 half-hour readings
+                            value = row[col_idx]
+                            if value is not None and value != '':
+                                try:
+                                    usage = float(value)
+                                    total_usage += usage
+                                    last_value = usage
+                                    last_time = f"{date_str} {ws.cell(1, col_idx + 1).value}"
+                                    reading_count += 1
+                                except (ValueError, TypeError):
+                                    pass
+                    
+                    parsed_data["last_hour_usage"] = last_value
+                    parsed_data["last_hour_reading_time"] = last_time
+                    parsed_data["daily_usage"] = total_usage
+                    parsed_data["monthly_usage"] = total_usage
+                    parsed_data["estimated_cost"] = round(total_usage * 0.12, 2)
+                    
+                    _LOGGER.info("Parsed %d usage readings from Excel, total: %.2f kWh", 
+                               reading_count, total_usage)
+                    
+                except Exception as e:
+                    _LOGGER.error("Error parsing Excel data: %s", e, exc_info=True)
             else:
-                _LOGGER.error("DEBUG: Response might be raw data (Excel/CSV)")
+                _LOGGER.error("DEBUG: Unexpected response format")
 
             _LOGGER.error("DEBUG: Final parsed data: %s", parsed_data)
             return parsed_data
