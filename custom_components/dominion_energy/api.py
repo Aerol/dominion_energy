@@ -878,6 +878,39 @@ class DominionEnergyAPI:
             _LOGGER.error("DEBUG: Usage response status: %s", response.status)
             _LOGGER.error("DEBUG: Usage response content-type: %s", response.headers.get('Content-Type'))
             
+            # Handle 401 - refresh token and retry
+            if response.status == 401:
+                _LOGGER.warning("Got 401 Unauthorized, refreshing token and retrying")
+                
+                # Refresh the token
+                refresh_success = await self.async_refresh_token()
+                if not refresh_success:
+                    raise DominionEnergyAPIError("Token refresh failed after 401")
+                
+                # Retry with new token
+                headers["Authorization"] = f"Bearer {self._access_token}"
+                
+                async with self.session.post(url, headers=headers, json=payload) as retry_response:
+                    _LOGGER.error("DEBUG: Retry response status: %s", retry_response.status)
+                    
+                    if retry_response.status != 200:
+                        text = await retry_response.text()
+                        _LOGGER.error("DEBUG: Retry failed: %s", text[:500])
+                        raise DominionEnergyAPIError(f"Failed to get usage after refresh: {retry_response.status} - {text}")
+                    
+                    # Process the retry response
+                    content = await retry_response.text()
+                    _LOGGER.error("DEBUG: Retry response first 500 chars: %s", content[:500])
+                    
+                    try:
+                        import json as json_lib
+                        data = json_lib.loads(content)
+                        _LOGGER.error("DEBUG: Successfully parsed retry response as JSON")
+                        return data
+                    except:
+                        _LOGGER.error("DEBUG: Retry response not JSON")
+                        return {"raw_data": content}
+            
             if response.status != 200:
                 text = await response.text()
                 _LOGGER.error("DEBUG: Usage response body: %s", text[:500])
