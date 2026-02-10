@@ -2,46 +2,48 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up Dominion Energy Virginia",
-        "description": "Choose your authentication method",
+        "title": "Dominion Energy Virginia",
+        "description": "Choose authentication method:",
         "data": {
           "auth_method": "Authentication Method"
         }
       },
       "automatic": {
         "title": "Automatic Login",
-        "description": "Enter your Dominion Energy credentials. 2FA will be handled automatically.",
+        "description": "Enter your Dominion Energy credentials. Two-factor authentication is supported.",
         "data": {
-          "username": "Email",
+          "username": "Email Address",
           "password": "Password"
         }
       },
-      "2fa_code": {
+      "tfa_code": {
         "title": "Two-Factor Authentication",
-        "description": "A verification code has been sent to your registered phone. Enter it below.",
+        "description": "{info}",
         "data": {
-          "2fa_code": "Verification Code"
+          "tfa_code": "Verification Code (6 digits)"
         }
       },
       "manual_token": {
         "title": "Manual Token",
-        "description": "Enter your manually extracted token and account details. See documentation for instructions.",
+        "description": "{instructions}",
         "data": {
-          "manual_token": "Bearer Token",
+          "manual_token": "Access Token",
           "account_number": "Account Number",
-          "customer_number": "Customer Number",
+          "customer_number": "Customer Number (BP Number)",
           "meter_number": "Meter Number"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to Dominion Energy. Please check your credentials.",
+      "cannot_connect": "Unable to connect to Dominion Energy. Please try again.",
+      "invalid_auth": "Invalid email or password.",
       "invalid_2fa_code": "Invalid verification code. Please try again.",
-      "invalid_token": "Invalid token or unable to fetch data. Please verify the token and account information.",
-      "unknown": "An unexpected error occurred. Please try again."
+      "no_tfa_options": "No 2FA options available for your account.",
+      "invalid_token": "Invalid token format or missing account details.",
+      "unknown": "Unexpected error occurred. Please try again."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "Account is already configured."
     }
   }
 }

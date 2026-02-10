@@ -1,4 +1,7 @@
-"""Config flow for Dominion Energy Virginia integration."""
+"""Config flow for Dominion Energy Virginia integration.
+
+Implements step-by-step 2FA flow based on dompower library.
+"""
 from __future__ import annotations
 
 import logging
@@ -12,7 +15,14 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 
-from .api import DominionEnergyAPI, DominionEnergyAPIError
+from .api import (
+    DominionEnergyAPI,
+    DominionEnergyAPIError,
+    InvalidCredentialsError,
+    TFARequiredError,
+    TFAVerificationError,
+    TokenExpiredError,
+)
 from .const import DOMAIN, CONF_MANUAL_TOKEN
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,23 +31,28 @@ _LOGGER = logging.getLogger(__name__)
 STEP_AUTH_METHOD_SCHEMA = vol.Schema(
     {
         vol.Required("auth_method", default="automatic"): vol.In({
-            "automatic": "Automatic (Username & Password) - May not work due to bot detection",
-            "manual_token": "Manual Token (Recommended)"
+            "automatic": "Automatic (Username & Password with 2FA)",
+            "manual_token": "Manual Token"
         })
     }
 )
 
-# Step 2a: Username/Password (if automatic chosen)
+# Step 2a: Username/Password
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional("gigya_gmid", description="Gigya gmid cookie (optional, for 2FA)"): cv.string,
-        vol.Optional("gigya_ucid", description="Gigya ucid cookie (optional, for 2FA)"): cv.string,
     }
 )
 
-# Step 2b: Manual token (if manual chosen)
+# Step 3: 2FA Code
+STEP_TFA_CODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("tfa_code"): cv.string,
+    }
+)
+
+# Step 2b: Manual token
 STEP_MANUAL_TOKEN_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_MANUAL_TOKEN): cv.string,
@@ -58,9 +73,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.auth_method = None
         self.data = {}
         self.api = None
-        self.reg_token = None
         self.username = None
         self.password = None
+        self.tfa_targets = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -71,7 +86,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="user",
                 data_schema=STEP_AUTH_METHOD_SCHEMA,
                 description_placeholders={
-                    "manual_token_instructions": "See WORKAROUND_MANUAL_TOKEN.md for instructions on extracting your token"
+                    "manual_token_instructions": "Manual token for advanced users only"
                 }
             )
 
@@ -91,7 +106,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="automatic",
                 data_schema=STEP_USER_DATA_SCHEMA,
                 description_placeholders={
-                    "warning": "Automatic login with 2FA support"
+                    "warning": "Login with two-factor authentication support"
                 }
             )
 
@@ -104,19 +119,96 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             password=self.password,
             session=async_get_clientsession(self.hass),
         )
-        
-        # Set Gigya cookies if provided
-        gmid = user_input.get("gigya_gmid")
-        ucid = user_input.get("gigya_ucid")
-        if gmid and ucid:
-            self.api.set_gigya_cookies(gmid, ucid)
-            _LOGGER.info("Using provided Gigya cookies for 2FA")
 
         try:
-            await self.api.async_login()
+            # Submit credentials
+            result = await self.api.async_submit_credentials()
 
+            if result.get("tfa_required"):
+                # 2FA required - get options and move to 2FA step
+                _LOGGER.info("2FA required for %s", self.username)
+
+                self.tfa_targets = await self.api.async_get_tfa_options()
+
+                if not self.tfa_targets:
+                    errors["base"] = "no_tfa_options"
+                else:
+                    # Send code to first target (usually phone)
+                    await self.api.async_send_tfa_code(self.tfa_targets[0])
+
+                    # Move to 2FA code entry
+                    return await self.async_step_tfa_code()
+            else:
+                # No 2FA needed - exchange for tokens
+                tokens = await self.api._async_exchange_for_dominion_tokens()
+
+                await self.async_set_unique_id(self.username)
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=f"Dominion Energy - {self.username}",
+                    data={
+                        "auth_method": "automatic",
+                        CONF_USERNAME: self.username,
+                        CONF_PASSWORD: self.password,
+                        "access_token": tokens.access_token,
+                        "refresh_token": tokens.refresh_token,
+                        "cookies": self.api.export_cookies(),
+                    },
+                )
+
+        except InvalidCredentialsError as e:
+            _LOGGER.error("Invalid credentials: %s", e)
+            errors["base"] = "invalid_auth"
+
+        except DominionEnergyAPIError as e:
+            _LOGGER.error("Authentication failed: %s", e)
+            errors["base"] = "cannot_connect"
+
+        except Exception as e:
+            _LOGGER.exception("Unexpected exception: %s", e)
+            errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="automatic",
+            data_schema=STEP_USER_DATA_SCHEMA,
+            errors=errors
+        )
+
+    async def async_step_tfa_code(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle 2FA code entry."""
+        if user_input is None:
+            # Show which target the code was sent to
+            target_info = ""
+            if self.tfa_targets:
+                target = self.tfa_targets[0]
+                target_info = f"Code sent to: {target.target}"
+
+            return self.async_show_form(
+                step_id="tfa_code",
+                data_schema=STEP_TFA_CODE_SCHEMA,
+                description_placeholders={
+                    "info": target_info or "Enter the 6-digit verification code"
+                }
+            )
+
+        errors = {}
+
+        try:
+            code = user_input["tfa_code"].strip()
+
+            _LOGGER.info("Verifying 2FA code")
+
+            # Verify code and get tokens
+            tokens = await self.api.async_verify_tfa_code(code)
+
+            # 2FA successful! Create entry
             await self.async_set_unique_id(self.username)
             self._abort_if_unique_id_configured()
+
+            _LOGGER.info("2FA successful, creating config entry")
 
             return self.async_create_entry(
                 title=f"Dominion Energy - {self.username}",
@@ -124,36 +216,23 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "auth_method": "automatic",
                     CONF_USERNAME: self.username,
                     CONF_PASSWORD: self.password,
+                    "access_token": tokens.access_token,
+                    "refresh_token": tokens.refresh_token,
+                    "cookies": self.api.export_cookies(),
                 },
             )
 
-        except DominionEnergyAPIError as e:
-            error_str = str(e)
+        except TFAVerificationError as e:
+            _LOGGER.error("2FA verification failed: %s", e)
+            errors["base"] = "invalid_2fa_code"
 
-            if error_str.startswith("2FA_REQUIRED:"):
-                self.reg_token = error_str.split(":", 1)[1]
-                _LOGGER.info("2FA required, sending SMS code now")
-                
-                # Send SMS code BEFORE showing the form
-                sms_sent = await self.api.send_2fa_sms(self.reg_token)
-                
-                if not sms_sent:
-                    _LOGGER.error("Failed to send SMS code")
-                    errors["base"] = "cannot_connect"
-                else:
-                    # SMS sent successfully, now show the form
-                    return await self.async_step_2fa_code()
-            else:
-                _LOGGER.error("Authentication failed: %s", error_str)
-                errors["base"] = "cannot_connect"
-
-        except Exception:
-            _LOGGER.exception("Unexpected exception")
+        except Exception as e:
+            _LOGGER.exception("Error during 2FA: %s", e)
             errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="automatic",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            step_id="tfa_code",
+            data_schema=STEP_TFA_CODE_SCHEMA,
             errors=errors
         )
 
@@ -167,11 +246,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data_schema=STEP_MANUAL_TOKEN_SCHEMA,
                 description_placeholders={
                     "instructions": (
-                        "1. Log in to myaccount.dominionenergy.com in your browser\n"
-                        "2. Open Developer Tools (F12) → Network tab\n"
+                        "1. Log in to myaccount.dominionenergy.com\n"
+                        "2. Open DevTools (F12) → Network tab\n"
                         "3. Look for requests to prodsvc-dominioncip.smartcmobile.com\n"
-                        "4. Copy the Authorization Bearer token (starts with eyJ...)\n"
-                        "5. Find your account number and meter number in the UI"
+                        "4. Copy the Authorization Bearer token and account details"
                     )
                 }
             )
@@ -184,24 +262,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             customer = user_input["customer_number"].strip()
             meter = user_input["meter_number"].strip()
 
-            _LOGGER.debug("Manual token validation - Token starts with: %s, Length: %d",
-                         token[:10], len(token))
-            _LOGGER.debug("Account: %s, Customer: %s, Meter: %s", account, customer, meter)
+            _LOGGER.debug("Manual token validation")
 
             if not token.startswith("eyJ"):
                 _LOGGER.error("Token does not start with eyJ")
                 errors["base"] = "invalid_token"
             elif len(token) < 100:
-                _LOGGER.error("Token too short: %d characters", len(token))
+                _LOGGER.error("Token too short")
                 errors["base"] = "invalid_token"
             elif not account or not customer or not meter:
-                _LOGGER.error("Missing account, customer, or meter number")
+                _LOGGER.error("Missing account details")
                 errors["base"] = "invalid_token"
             else:
-                _LOGGER.info("Token validation passed, creating entry")
+                _LOGGER.info("Token validation passed")
 
-        except Exception as err:
-            _LOGGER.exception("Unexpected exception during validation: %s", err)
+        except Exception as e:
+            _LOGGER.exception("Unexpected exception: %s", e)
             errors["base"] = "unknown"
         else:
             if not errors:
@@ -209,7 +285,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=f"Dominion Energy - {user_input['account_number']}",
+                    title=f"Dominion Energy - {account}",
                     data={
                         "auth_method": "manual_token",
                         CONF_MANUAL_TOKEN: token,
@@ -229,58 +305,4 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="manual_token",
             data_schema=STEP_MANUAL_TOKEN_SCHEMA
-        )
-
-    async def async_step_2fa_code(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle 2FA code entry."""
-        if user_input is None:
-            return self.async_show_form(
-                step_id="2fa_code",
-                data_schema=vol.Schema({
-                    vol.Required("2fa_code"): cv.string,
-                }),
-                description_placeholders={
-                    "info": "A verification code has been sent to your registered phone. Enter the 6-digit code below."
-                }
-            )
-
-        errors = {}
-
-        try:
-            code = user_input["2fa_code"].strip()
-
-            _LOGGER.info("Completing 2FA with code")
-
-            success = await self.api.complete_2fa_login(self.reg_token, code)
-
-            if not success:
-                _LOGGER.error("2FA completion failed")
-                errors["base"] = "invalid_2fa_code"
-            else:
-                await self.async_set_unique_id(self.username)
-                self._abort_if_unique_id_configured()
-
-                _LOGGER.info("2FA successful, creating config entry")
-
-                return self.async_create_entry(
-                    title=f"Dominion Energy - {self.username}",
-                    data={
-                        "auth_method": "automatic",
-                        CONF_USERNAME: self.username,
-                        CONF_PASSWORD: self.password,
-                    },
-                )
-
-        except Exception as err:
-            _LOGGER.exception("Error during 2FA: %s", err)
-            errors["base"] = "unknown"
-
-        return self.async_show_form(
-            step_id="2fa_code",
-            data_schema=vol.Schema({
-                vol.Required("2fa_code"): cv.string,
-            }),
-            errors=errors
         )
