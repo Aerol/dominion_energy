@@ -244,17 +244,17 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             yesterday = today - timedelta(days=1)
             first_of_month = today.replace(day=1)
             
-            # Fetch TODAY's data for daily usage
-            _LOGGER.error("DEBUG: === Fetching TODAY's data (%s) ===", today)
+            # Fetch YESTERDAY's data for daily usage (today's data isn't finalized yet)
+            _LOGGER.error("DEBUG: === Fetching YESTERDAY's data (%s) for daily usage ===", yesterday)
             daily_excel = await self.api.async_get_usage(
-                start_date=datetime.combine(today, datetime.min.time()),
-                end_date=datetime.combine(today, datetime.max.time())
+                start_date=datetime.combine(yesterday, datetime.min.time()),
+                end_date=datetime.combine(yesterday, datetime.max.time())
             )
             
             try:
                 daily_green_button = await self.api.async_get_green_button_data(
-                    start_date=datetime.combine(today, datetime.min.time()),
-                    end_date=datetime.combine(today, datetime.max.time())
+                    start_date=datetime.combine(yesterday, datetime.min.time()),
+                    end_date=datetime.combine(yesterday, datetime.max.time())
                 )
             except Exception as e:
                 _LOGGER.error("DEBUG: Failed to fetch daily Green Button data: %s", e)

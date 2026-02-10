@@ -101,9 +101,9 @@ class DominionEnergyCurrentHourUsageSensor(DominionEnergySensorBase):
 
 
 class DominionEnergyDailyUsageSensor(DominionEnergySensorBase):
-    """Sensor for daily energy usage."""
+    """Sensor for daily energy usage (yesterday's complete data)."""
 
-    _attr_name = "Daily Usage"
+    _attr_name = "Yesterday Usage"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
