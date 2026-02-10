@@ -250,29 +250,57 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                     # Parse XML
                     root = ET.fromstring(xml_bytes)
                     
-                    # Green Button XML uses ESPI namespace
+                    # Register namespace
+                    ET.register_namespace('espi', 'http://naesb.org/espi')
                     ns = {'espi': 'http://naesb.org/espi'}
                     
+                    # Get powerOfTenMultiplier from ReadingType
+                    # This tells us how to scale the values
+                    power_multiplier = 0
+                    reading_type = root.find('.//espi:ReadingType', ns)
+                    if reading_type is not None:
+                        power_elem = reading_type.find('espi:powerOfTenMultiplier', ns)
+                        if power_elem is not None and power_elem.text:
+                            power_multiplier = int(power_elem.text)
+                            _LOGGER.error("DEBUG: powerOfTenMultiplier: %d (multiply by 10^%d)", 
+                                         power_multiplier, power_multiplier)
+                    
                     # Find all IntervalReading elements
+                    # They're nested: IntervalBlock -> IntervalReading -> value
                     readings = root.findall('.//espi:IntervalReading', ns)
                     _LOGGER.error("DEBUG: Found %d IntervalReading elements", len(readings))
                     
-                    if not readings:
-                        # Try without namespace
-                        readings = root.findall('.//IntervalReading')
-                        _LOGGER.error("DEBUG: Without namespace found %d IntervalReading elements", len(readings))
+                    if readings and len(readings) > 0:
+                        # Log first reading structure
+                        first_reading = readings[0]
+                        _LOGGER.error("DEBUG: First reading has value: %s", 
+                                     first_reading.find('espi:value', ns).text if first_reading.find('espi:value', ns) is not None else "None")
                     
-                    for reading in readings:
-                        # Get value in Wh
-                        value_elem = reading.find('.//espi:value', ns) or reading.find('.//value')
+                    for idx, reading in enumerate(readings):
+                        # Get value element (direct child, not descendant)
+                        value_elem = reading.find('espi:value', ns)
+                        
                         if value_elem is not None and value_elem.text:
                             try:
-                                # Green Button values are typically in Wh, convert to kWh
-                                wh = float(value_elem.text)
+                                # Raw value from XML
+                                raw_value = int(value_elem.text)
+                                
+                                # Apply power of ten multiplier
+                                # powerOfTenMultiplier = 3 means multiply by 1000
+                                # The unit is Wh (watt-hours)
+                                wh = raw_value * (10 ** power_multiplier)
+                                
+                                # Convert Wh to kWh
                                 kwh = wh / 1000.0
+                                
                                 green_button_total += kwh
-                            except (ValueError, TypeError):
-                                pass
+                                
+                                if idx < 5:  # Log first 5
+                                    _LOGGER.error("DEBUG: Reading %d - raw: %d, Wh: %.2f, kWh: %.4f", 
+                                                 idx, raw_value, wh, kwh)
+                            except (ValueError, TypeError) as e:
+                                if idx < 5:
+                                    _LOGGER.error("DEBUG: Reading %d - Failed to parse: %s", idx, e)
                     
                     parsed_data["green_button_total"] = green_button_total
                     
