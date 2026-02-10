@@ -43,6 +43,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if cookies:
             api.import_cookies(cookies)
 
+        # Set account numbers from config
+        api._account_number = entry.data.get("account_number")
+        api._customer_number = entry.data.get("customer_number")
+        api._meter_number = entry.data.get("meter_number")
+
         # Ensure token is valid (will auto-refresh if needed)
         try:
             await api.async_ensure_valid_token()

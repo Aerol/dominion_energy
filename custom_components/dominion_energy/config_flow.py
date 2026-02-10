@@ -207,11 +207,84 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Verify code and get tokens
             tokens = await self.api.async_verify_tfa_code(code)
 
-            # 2FA successful! Create entry
+            # 2FA successful! Try to get account info
+            _LOGGER.info("2FA successful, attempting to get account info")
+            
+            try:
+                await self.api.async_get_account_info()
+                
+                # Check if we got account details
+                if self.api._account_number and self.api._meter_number:
+                    # Got everything - create entry
+                    await self.async_set_unique_id(self.username)
+                    self._abort_if_unique_id_configured()
+
+                    _LOGGER.info("Account info retrieved, creating config entry")
+
+                    return self.async_create_entry(
+                        title=f"Dominion Energy - {self.username}",
+                        data={
+                            "auth_method": "automatic",
+                            CONF_USERNAME: self.username,
+                            CONF_PASSWORD: self.password,
+                            "access_token": tokens.access_token,
+                            "refresh_token": tokens.refresh_token,
+                            "account_number": self.api._account_number,
+                            "customer_number": self.api._customer_number,
+                            "meter_number": self.api._meter_number,
+                            "cookies": self.api.export_cookies(),
+                        },
+                    )
+            except Exception as e:
+                _LOGGER.warning("Could not auto-fetch account info: %s", e)
+            
+            # Account info failed - ask user for details
+            _LOGGER.info("Need to ask user for account details")
+            return await self.async_step_account_details()
+
+        except TFAVerificationError as e:
+            _LOGGER.error("2FA verification failed: %s", e)
+            errors["base"] = "invalid_2fa_code"
+
+        except Exception as e:
+            _LOGGER.exception("Error during 2FA: %s", e)
+            errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="tfa_code",
+            data_schema=STEP_TFA_CODE_SCHEMA,
+            errors=errors
+        )
+
+    async def async_step_account_details(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Get account details from user if auto-fetch failed."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="account_details",
+                data_schema=vol.Schema({
+                    vol.Required("account_number"): cv.string,
+                    vol.Required("customer_number"): cv.string,
+                    vol.Required("meter_number"): cv.string,
+                }),
+                description_placeholders={
+                    "info": "Enter your account details from myaccount.dominionenergy.com"
+                }
+            )
+
+        errors = {}
+
+        try:
+            # Save account details
+            account_number = user_input["account_number"].strip()
+            customer_number = user_input["customer_number"].strip()
+            meter_number = user_input["meter_number"].strip()
+
             await self.async_set_unique_id(self.username)
             self._abort_if_unique_id_configured()
 
-            _LOGGER.info("2FA successful, creating config entry")
+            _LOGGER.info("Creating config entry with manual account details")
 
             return self.async_create_entry(
                 title=f"Dominion Energy - {self.username}",
@@ -219,8 +292,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "auth_method": "automatic",
                     CONF_USERNAME: self.username,
                     CONF_PASSWORD: self.password,
-                    "access_token": tokens.access_token,
-                    "refresh_token": tokens.refresh_token,
+                    "access_token": self.api._access_token,
+                    "refresh_token": self.api._refresh_token,
+                    "account_number": account_number,
+                    "customer_number": customer_number,
+                    "meter_number": meter_number,
                     "cookies": self.api.export_cookies(),
                 },
             )

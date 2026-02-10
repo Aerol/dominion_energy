@@ -23,6 +23,15 @@
           "tfa_code": "Verification Code (6 digits)"
         }
       },
+      "account_details": {
+        "title": "Account Details",
+        "description": "{info}",
+        "data": {
+          "account_number": "Account Number",
+          "customer_number": "Customer Number (BP Number)",
+          "meter_number": "Meter Number"
+        }
+      },
       "manual_token": {
         "title": "Manual Token",
         "description": "{instructions}",
