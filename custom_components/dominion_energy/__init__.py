@@ -47,6 +47,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api._account_number = entry.data.get("account_number")
         api._customer_number = entry.data.get("customer_number")
         api._meter_number = entry.data.get("meter_number")
+        
+        _LOGGER.error("DEBUG: Config entry data keys: %s", list(entry.data.keys()))
+        _LOGGER.error("DEBUG: Account number from config: %s", api._account_number)
+        _LOGGER.error("DEBUG: Customer number from config: %s", api._customer_number)
+        _LOGGER.error("DEBUG: Meter number from config: %s", api._meter_number)
+        
+        if not api._account_number or not api._meter_number:
+            _LOGGER.error("Missing account/meter numbers in config entry! Please reconfigure integration.")
+            return False
 
         # Ensure token is valid (will auto-refresh if needed)
         try:

@@ -229,9 +229,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             
             # If we got account info, create entry directly
             if account_info_success:
-                await self.async_set_unique_id(self.username)
-                self._abort_if_unique_id_configured()
-
                 _LOGGER.info("Creating config entry with auto-fetched account info")
 
                 return self.async_create_entry(
@@ -249,8 +246,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
             else:
-                # Account info failed - ask user for details
-                _LOGGER.info("Need to ask user for account details")
+                # Account info failed - MUST ask user for details
+                _LOGGER.error("DEBUG: Going to account_details step because account_info_success=%s", account_info_success)
+                _LOGGER.error("DEBUG: self.api._account_number=%s, self.api._meter_number=%s", 
+                            self.api._account_number, self.api._meter_number)
                 return await self.async_step_account_details()
 
         except TFAVerificationError as e:
@@ -291,9 +290,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             account_number = user_input["account_number"].strip()
             customer_number = user_input["customer_number"].strip()
             meter_number = user_input["meter_number"].strip()
-
-            await self.async_set_unique_id(self.username)
-            self._abort_if_unique_id_configured()
 
             _LOGGER.info("Creating config entry with manual account details")
 
