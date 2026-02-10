@@ -26,7 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 BASE_URL = "https://prodsvc-dominioncip.smartcmobile.com"
 ENDPOINT_LOGIN = "/UsermanagementAPI/api/1/Login/auth"
 ENDPOINT_REFRESH = "/UsermanagementAPI/api/1/login/auth/refresh"
-ENDPOINT_USAGE = "/UsermanagementAPI/api/1/Usage"
+ENDPOINT_USAGE = "/Service/api/1/Usage/DownloadExcelNew"
 ENDPOINT_ACCOUNTS = "/UsermanagementAPI/api/1/Account"
 
 DEFAULT_HEADERS = {
@@ -856,22 +856,44 @@ class DominionEnergyAPI:
             "Authorization": f"Bearer {token}",
         }
         
-        params = {
+        # Payload format from dompower - try JSON format
+        payload = {
+            "Format": "Json",  # Try JSON instead of CSV
             "accountNumber": account,
-            "meterNumber": meter,
-            "fromDate": start_date.strftime("%Y-%m-%d"),
-            "toDate": end_date.strftime("%Y-%m-%d"),
+            "meterIds": [meter],
+            "uom": "kWh",
+            "periodicity": "HH",  # Half-hourly (30 min intervals)
+            "serviceType": "Electric",
+            "decimalPlaces": "2",
+            "isNetUsage": "false",
+            "displayUnit": "kWh",
+            "from": start_date.strftime("%Y-%m-%d"),
+            "to": end_date.strftime("%Y-%m-%d"),
         }
         
         _LOGGER.error("DEBUG: Usage request URL: %s", url)
-        _LOGGER.error("DEBUG: Usage request params: %s", params)
+        _LOGGER.error("DEBUG: Usage request payload: %s", payload)
         
-        async with self.session.get(url, headers=headers, params=params) as response:
-            text = await response.text()
+        async with self.session.post(url, headers=headers, json=payload) as response:
             _LOGGER.error("DEBUG: Usage response status: %s", response.status)
-            _LOGGER.error("DEBUG: Usage response body: %s", text[:500])
+            _LOGGER.error("DEBUG: Usage response content-type: %s", response.headers.get('Content-Type'))
             
             if response.status != 200:
+                text = await response.text()
+                _LOGGER.error("DEBUG: Usage response body: %s", text[:500])
                 raise DominionEnergyAPIError(f"Failed to get usage: {response.status} - {text}")
             
-            return await response.json()
+            # Try to get as text first to see what we got
+            content = await response.text()
+            _LOGGER.error("DEBUG: Got response, first 500 chars: %s", content[:500])
+            
+            # Try to parse as JSON
+            try:
+                import json as json_lib
+                data = json_lib.loads(content)
+                _LOGGER.error("DEBUG: Successfully parsed as JSON")
+                return data
+            except:
+                _LOGGER.error("DEBUG: Not JSON, might be Excel/CSV")
+                # Return raw content for parsing
+                return {"raw_data": content}

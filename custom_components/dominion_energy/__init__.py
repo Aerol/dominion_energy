@@ -150,7 +150,7 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             
             raw_data = await self.api.async_get_usage()
             
-            _LOGGER.error("DEBUG: Raw usage data response: %s", raw_data)
+            _LOGGER.error("DEBUG: Raw usage data response keys: %s", list(raw_data.keys()) if isinstance(raw_data, dict) else type(raw_data))
 
             # Parse the response into sensor data
             parsed_data = {
@@ -163,60 +163,43 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                 "estimated_cost": 0,
             }
             
-            # Extract usage from API response
-            # The response structure from dompower: data.data.usage or similar
-            if raw_data and isinstance(raw_data, dict):
-                _LOGGER.error("DEBUG: Response is a dict, checking structure...")
+            # Check if we got JSON data
+            if raw_data and isinstance(raw_data, dict) and "raw_data" not in raw_data:
+                _LOGGER.error("DEBUG: Processing JSON response")
+                _LOGGER.error("DEBUG: Response structure: %s", raw_data)
                 
-                data_section = raw_data.get("data", {})
-                _LOGGER.error("DEBUG: data section keys: %s", list(data_section.keys()) if data_section else "None")
+                # Try to find the data section
+                data_section = raw_data.get("data", raw_data)
                 
-                # Try to extract usage data
-                if "usage" in data_section:
-                    usage_list = data_section.get("usage", [])
-                    _LOGGER.error("DEBUG: Found 'usage' with %d items", len(usage_list))
-                    if usage_list:
-                        # Get most recent reading
-                        last_reading = usage_list[-1]
-                        _LOGGER.error("DEBUG: Last reading: %s", last_reading)
-                        parsed_data["last_hour_usage"] = float(last_reading.get("usage", 0))
-                        parsed_data["last_hour_reading_time"] = last_reading.get("readingDateTimeUtc")
-                        
-                        # Calculate daily usage (sum of all readings for today)
-                        daily_total = sum(float(r.get("usage", 0)) for r in usage_list)
-                        parsed_data["daily_usage"] = daily_total
-                        
-                        # Monthly usage (if we have enough data)
-                        parsed_data["monthly_usage"] = daily_total
-                        
-                        # Estimate cost (rough calculation at $0.12/kWh)
-                        parsed_data["estimated_cost"] = round(daily_total * 0.12, 2)
-                        
-                        _LOGGER.info("Parsed %d usage readings, last: %.2f kWh", 
-                                   len(usage_list), parsed_data["last_hour_usage"])
-                elif "intervals" in data_section:
-                    # Alternative format
-                    intervals = data_section.get("intervals", [])
-                    _LOGGER.error("DEBUG: Found 'intervals' with %d items", len(intervals))
+                if "intervals" in data_section or "usage" in data_section:
+                    # Standard format
+                    intervals = data_section.get("intervals", data_section.get("usage", []))
+                    _LOGGER.error("DEBUG: Found %d intervals/usage items", len(intervals))
+                    
                     if intervals:
-                        last_reading = intervals[-1]
-                        _LOGGER.error("DEBUG: Last interval: %s", last_reading)
-                        parsed_data["last_hour_usage"] = float(last_reading.get("value", 0))
-                        parsed_data["last_hour_reading_time"] = last_reading.get("timestamp")
+                        _LOGGER.error("DEBUG: First interval: %s", intervals[0])
+                        _LOGGER.error("DEBUG: Last interval: %s", intervals[-1])
                         
-                        daily_total = sum(float(i.get("value", 0)) for i in intervals)
-                        parsed_data["daily_usage"] = daily_total
-                        parsed_data["monthly_usage"] = daily_total
-                        parsed_data["estimated_cost"] = round(daily_total * 0.12, 2)
+                        total = 0
+                        for item in intervals:
+                            val = item.get("value", item.get("consumption", item.get("usage", 0)))
+                            try:
+                                total += float(val)
+                            except (ValueError, TypeError):
+                                pass
                         
-                        _LOGGER.info("Parsed %d intervals, last: %.2f kWh",
-                                   len(intervals), parsed_data["last_hour_usage"])
+                        last = intervals[-1]
+                        parsed_data["last_hour_usage"] = float(last.get("value", last.get("consumption", last.get("usage", 0))))
+                        parsed_data["last_hour_reading_time"] = last.get("timestamp", last.get("date", last.get("readingDateTime")))
+                        parsed_data["daily_usage"] = total
+                        parsed_data["monthly_usage"] = total
+                        parsed_data["estimated_cost"] = round(total * 0.12, 2)
+                        
+                        _LOGGER.info("Parsed %d usage readings, total: %.2f kWh", len(intervals), total)
                 else:
-                    _LOGGER.error("DEBUG: Unknown usage data format in response")
-                    _LOGGER.error("DEBUG: Available keys in data section: %s", list(data_section.keys()))
-                    _LOGGER.error("DEBUG: Full data section: %s", data_section)
+                    _LOGGER.error("DEBUG: Unknown JSON structure, keys: %s", list(data_section.keys()))
             else:
-                _LOGGER.error("DEBUG: Invalid or empty API response, raw_data type: %s", type(raw_data))
+                _LOGGER.error("DEBUG: Response might be raw data (Excel/CSV)")
 
             _LOGGER.error("DEBUG: Final parsed data: %s", parsed_data)
             return parsed_data
