@@ -153,13 +153,25 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             if self.api.has_tokens:
                 await self.api.async_ensure_valid_token()
 
-            # Fetch usage data
+            # Fetch BOTH Excel and Green Button data for comparison
             _LOGGER.error("DEBUG: Fetching usage data with account=%s, meter=%s", 
                          self.api._account_number, self.api._meter_number)
             
-            raw_data = await self.api.async_get_usage()
+            # Fetch Excel data
+            _LOGGER.error("DEBUG: === Fetching Excel data ===")
+            excel_data = await self.api.async_get_usage()
             
-            _LOGGER.error("DEBUG: Raw usage data response keys: %s", list(raw_data.keys()) if isinstance(raw_data, dict) else type(raw_data))
+            # Fetch Green Button data
+            _LOGGER.error("DEBUG: === Fetching Green Button data ===")
+            try:
+                green_button_data = await self.api.async_get_green_button_data()
+            except Exception as e:
+                _LOGGER.error("DEBUG: Failed to fetch Green Button data: %s", e)
+                green_button_data = None
+            
+            _LOGGER.error("DEBUG: Excel data keys: %s", list(excel_data.keys()) if isinstance(excel_data, dict) else type(excel_data))
+            if green_button_data:
+                _LOGGER.error("DEBUG: Green Button data keys: %s", list(green_button_data.keys()) if isinstance(green_button_data, dict) else type(green_button_data))
 
             # Parse the response into sensor data
             parsed_data = {
@@ -170,49 +182,45 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                 "daily_usage": 0,
                 "monthly_usage": 0,
                 "estimated_cost": 0,
+                "excel_total": 0,
+                "green_button_total": 0,
             }
             
-            # Check if we got Excel data
-            if raw_data and isinstance(raw_data, dict) and "raw_excel" in raw_data:
-                _LOGGER.error("DEBUG: Processing Excel response")
+            excel_total = 0
+            green_button_total = 0
+            
+            # Parse Excel data
+            if excel_data and isinstance(excel_data, dict) and "raw_excel" in excel_data:
+                _LOGGER.error("DEBUG: === Processing Excel response ===")
                 
                 try:
                     from openpyxl import load_workbook
                     from io import BytesIO
                     
-                    excel_bytes = raw_data["raw_excel"]
+                    excel_bytes = excel_data["raw_excel"]
                     _LOGGER.error("DEBUG: Excel data size: %d bytes", len(excel_bytes))
                     
-                    # Load Excel file
                     wb = load_workbook(BytesIO(excel_bytes))
                     ws = wb.active
                     
                     _LOGGER.error("DEBUG: Excel loaded, %d rows", ws.max_row)
                     
-                    # Excel format from dompower: 
-                    # Row 1: Headers
-                    # Row 2+: Data with date in column C, then 48 half-hour readings
-                    
-                    total_usage = 0
                     last_value = 0
                     last_time = None
                     reading_count = 0
                     
-                    # Skip header row, iterate data rows
                     for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
                         if not row or len(row) < 4:
                             continue
                         
-                        # Row format: Account, Recorder ID, Date, 12:00 AM, 12:30 AM, 1:00 AM...
-                        date_str = row[2]  # Column C
+                        date_str = row[2]
                         
-                        # Iterate through the 48 half-hour columns (columns D onwards)
-                        for col_idx in range(3, min(len(row), 51)):  # 48 half-hour readings
+                        for col_idx in range(3, min(len(row), 51)):
                             value = row[col_idx]
                             if value is not None and value != '':
                                 try:
                                     usage = float(value)
-                                    total_usage += usage
+                                    excel_total += usage
                                     last_value = usage
                                     last_time = f"{date_str} {ws.cell(1, col_idx + 1).value}"
                                     reading_count += 1
@@ -221,17 +229,79 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                     
                     parsed_data["last_hour_usage"] = last_value
                     parsed_data["last_hour_reading_time"] = last_time
-                    parsed_data["daily_usage"] = total_usage
-                    parsed_data["monthly_usage"] = total_usage
-                    parsed_data["estimated_cost"] = round(total_usage * 0.12, 2)
+                    parsed_data["excel_total"] = excel_total
                     
-                    _LOGGER.info("Parsed %d usage readings from Excel, total: %.2f kWh", 
-                               reading_count, total_usage)
+                    _LOGGER.error("DEBUG: Excel parsed: %d readings, total: %.2f kWh", 
+                               reading_count, excel_total)
                     
                 except Exception as e:
                     _LOGGER.error("Error parsing Excel data: %s", e, exc_info=True)
-            else:
-                _LOGGER.error("DEBUG: Unexpected response format")
+            
+            # Parse Green Button XML
+            if green_button_data and isinstance(green_button_data, dict) and "raw_xml" in green_button_data:
+                _LOGGER.error("DEBUG: === Processing Green Button XML ===")
+                
+                try:
+                    import xml.etree.ElementTree as ET
+                    
+                    xml_bytes = green_button_data["raw_xml"]
+                    _LOGGER.error("DEBUG: Green Button XML size: %d bytes", len(xml_bytes))
+                    
+                    # Parse XML
+                    root = ET.fromstring(xml_bytes)
+                    
+                    # Green Button XML uses ESPI namespace
+                    ns = {'espi': 'http://naesb.org/espi'}
+                    
+                    # Find all IntervalReading elements
+                    readings = root.findall('.//espi:IntervalReading', ns)
+                    _LOGGER.error("DEBUG: Found %d IntervalReading elements", len(readings))
+                    
+                    if not readings:
+                        # Try without namespace
+                        readings = root.findall('.//IntervalReading')
+                        _LOGGER.error("DEBUG: Without namespace found %d IntervalReading elements", len(readings))
+                    
+                    for reading in readings:
+                        # Get value in Wh
+                        value_elem = reading.find('.//espi:value', ns) or reading.find('.//value')
+                        if value_elem is not None and value_elem.text:
+                            try:
+                                # Green Button values are typically in Wh, convert to kWh
+                                wh = float(value_elem.text)
+                                kwh = wh / 1000.0
+                                green_button_total += kwh
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    parsed_data["green_button_total"] = green_button_total
+                    
+                    _LOGGER.error("DEBUG: Green Button parsed: %d readings, total: %.2f kWh", 
+                               len(readings), green_button_total)
+                    
+                except Exception as e:
+                    _LOGGER.error("Error parsing Green Button XML: %s", e, exc_info=True)
+            
+            # Use Green Button as primary if available, otherwise Excel
+            if green_button_total > 0:
+                _LOGGER.info("Using Green Button data (more accurate)")
+                parsed_data["daily_usage"] = green_button_total
+                parsed_data["monthly_usage"] = green_button_total
+            elif excel_total > 0:
+                _LOGGER.info("Using Excel data (Green Button unavailable)")
+                parsed_data["daily_usage"] = excel_total
+                parsed_data["monthly_usage"] = excel_total
+            
+            parsed_data["estimated_cost"] = round(parsed_data["daily_usage"] * 0.12, 2)
+            
+            # Log comparison
+            if excel_total > 0 and green_button_total > 0:
+                diff = abs(excel_total - green_button_total)
+                diff_pct = (diff / excel_total) * 100 if excel_total > 0 else 0
+                _LOGGER.error("DEBUG: === COMPARISON ===")
+                _LOGGER.error("DEBUG: Excel total:        %.2f kWh", excel_total)
+                _LOGGER.error("DEBUG: Green Button total: %.2f kWh", green_button_total)
+                _LOGGER.error("DEBUG: Difference:         %.2f kWh (%.1f%%)", diff, diff_pct)
 
             _LOGGER.error("DEBUG: Final parsed data: %s", parsed_data)
             return parsed_data

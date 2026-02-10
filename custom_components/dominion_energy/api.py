@@ -27,6 +27,7 @@ BASE_URL = "https://prodsvc-dominioncip.smartcmobile.com"
 ENDPOINT_LOGIN = "/UsermanagementAPI/api/1/Login/auth"
 ENDPOINT_REFRESH = "/UsermanagementAPI/api/1/login/auth/refresh"
 ENDPOINT_USAGE = "/Service/api/1/Usage/DownloadExcelNew"
+ENDPOINT_GREEN_BUTTON = "/ServiceExt/api/1/Usage/GreenButton"
 ENDPOINT_ACCOUNTS = "/UsermanagementAPI/api/1/Account"
 
 DEFAULT_HEADERS = {
@@ -914,3 +915,96 @@ class DominionEnergyAPI:
             
             # Return as raw Excel data
             return {"raw_excel": content}
+
+    async def async_get_green_button_data(
+        self,
+        account_number: str = None,
+        meter_number: str = None,
+        start_date: datetime = None,
+        end_date: datetime = None,
+        service_address: str = None,
+        full_name: str = None,
+    ) -> dict[str, Any]:
+        """Get usage data via Green Button XML format.
+        
+        Green Button is typically more accurate than Excel export.
+        """
+        token = await self.async_ensure_valid_token()
+        
+        account = account_number or self._account_number
+        meter = meter_number or self._meter_number
+        customer = self._customer_number
+        
+        _LOGGER.error("DEBUG: async_get_green_button_data called with account=%s, meter=%s", account, meter)
+        
+        if not account or not meter:
+            raise DominionEnergyAPIError("Account and meter numbers required")
+        
+        if not start_date:
+            start_date = datetime.now() - timedelta(days=7)
+        if not end_date:
+            end_date = datetime.now()
+        
+        url = f"{BASE_URL}{ENDPOINT_GREEN_BUTTON}"
+        headers = {
+            **DEFAULT_HEADERS,
+            "Authorization": f"Bearer {token}",
+            "customerNumber": customer or "",
+            "accountNumber": account,
+            "ReferenceId": f"MM-{uuid.uuid4()}",
+        }
+        
+        # Payload from your capture
+        payload = {
+            "accountNumber": account,
+            "meterNumber": meter,
+            "startDate": start_date.strftime("%Y-%m-%d"),
+            "endDate": end_date.strftime("%Y-%m-%d"),
+            "periodicity": "HH",  # Half-hourly
+            "serviceAddress": service_address or "",
+            "fullName": full_name or "",
+            "serviceType": "Electric",
+            "Uom": "kWh",
+            "Format": "Csv",  # Doesn't matter, returns XML anyway
+        }
+        
+        _LOGGER.error("DEBUG: Green Button request URL: %s", url)
+        _LOGGER.error("DEBUG: Green Button request payload: %s", payload)
+        
+        async with self.session.post(url, headers=headers, json=payload) as response:
+            _LOGGER.error("DEBUG: Green Button response status: %s", response.status)
+            _LOGGER.error("DEBUG: Green Button response content-type: %s", response.headers.get('Content-Type'))
+            
+            # Handle 401 - refresh token and retry
+            if response.status == 401:
+                _LOGGER.warning("Got 401 Unauthorized, refreshing token and retrying")
+                
+                refresh_success = await self.async_refresh_token()
+                if not refresh_success:
+                    raise DominionEnergyAPIError("Token refresh failed after 401")
+                
+                headers["Authorization"] = f"Bearer {self._access_token}"
+                
+                async with self.session.post(url, headers=headers, json=payload) as retry_response:
+                    _LOGGER.error("DEBUG: Retry response status: %s", retry_response.status)
+                    
+                    if retry_response.status != 200:
+                        text = await retry_response.text()
+                        _LOGGER.error("DEBUG: Retry failed: %s", text[:500])
+                        raise DominionEnergyAPIError(f"Failed to get Green Button data after refresh: {retry_response.status} - {text}")
+                    
+                    content = await retry_response.read()
+                    _LOGGER.error("DEBUG: Retry response got %d bytes", len(content))
+                    return {"raw_xml": content}
+            
+            if response.status != 200:
+                text = await response.text()
+                _LOGGER.error("DEBUG: Green Button response body: %s", text[:500])
+                raise DominionEnergyAPIError(f"Failed to get Green Button data: {response.status} - {text}")
+            
+            # Get as bytes (it's XML)
+            content = await response.read()
+            _LOGGER.error("DEBUG: Got Green Button XML response, %d bytes", len(content))
+            
+            # Return as raw XML data
+            return {"raw_xml": content}
