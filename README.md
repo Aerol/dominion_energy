@@ -1,207 +1,149 @@
-# Dominion Energy Virginia Integration for Home Assistant
+# Dominion Energy Virginia - Home Assistant Integration
 
-This custom integration allows you to monitor your Dominion Energy Virginia account directly in Home Assistant.
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
+[![GitHub Release](https://img.shields.io/github/release/yourusername/dominion-energy-hacs.svg)](https://github.com/yourusername/dominion-energy-hacs/releases)
 
-## ⚠️ Important Notes
-
-This integration has been **reverse-engineered** from the Dominion Energy web portal and uses **unofficial APIs**. Key points:
-
-- **Authentication**: Uses Gigya (SAP Customer Data Cloud) for initial login
-- **API Endpoints**: All endpoints are on `prodsvc-dominioncip.smartcmobile.com`
-- **JWT Token**: The integration currently uses the Gigya id_token. There appears to be an additional Dominion-specific JWT that is generated client-side or in a way that wasn't captured during reverse engineering. This may need refinement.
-- **Stability**: Dominion Energy may change their APIs at any time without notice
-- **Rate Limiting**: Be respectful of API usage to avoid account restrictions
+Home Assistant custom integration for Dominion Energy Virginia customers to monitor their energy usage in real-time.
 
 ## Features
 
-- **Daily Usage**: Energy consumed today (kWh)
-- **Monthly Usage**: Energy consumed this month (kWh) 
-- **Estimated Cost**: Current month's estimated bill ($)
-- **Account Info**: Account number and meter number
-- **Hourly Data**: Available through service calls (see advanced usage)
+- 🔐 **Automatic 2FA Authentication** - Secure login with SMS verification
+- 🔄 **Auto Token Refresh** - Tokens refresh automatically every 30 minutes
+- 🍪 **Cookie Persistence** - Bypasses 2FA on subsequent logins
+- 📊 **Dual Data Sources** - Uses both Excel export and official Green Button XML
+- ⚡ **Real-time Usage** - Yesterday's complete usage data
+- 📅 **Monthly Tracking** - Month-to-date energy consumption
+- 💰 **Cost Estimation** - Automatic cost calculation
 
 ## Installation
 
 ### HACS (Recommended)
 
-1. Make sure [HACS](https://hacs.xyz/) is installed in your Home Assistant
-2. Add this repository as a custom repository in HACS:
-   - Go to HACS → Integrations → ⋮ (top right) → Custom repositories
-   - Add URL: `https://github.com/yourusername/dominion_energy`
-   - Category: Integration
-3. Click "Install" on the Dominion Energy Virginia integration
-4. Restart Home Assistant
+1. Open HACS
+2. Click "Integrations"
+3. Click the 3 dots in top right → "Custom repositories"
+4. Add this repository URL
+5. Select "Integration" as category
+6. Click "Add"
+7. Search for "Dominion Energy Virginia"
+8. Click "Download"
+9. Restart Home Assistant
 
 ### Manual Installation
 
-1. Copy the `dominion_energy` folder to your `config/custom_components` directory
-2. If the `custom_components` directory doesn't exist, create it first
+1. Download the latest release
+2. Copy `custom_components/dominion_energy` to your HA `custom_components` directory
 3. Restart Home Assistant
 
 ## Configuration
 
 1. Go to **Settings** → **Devices & Services**
-2. Click **+ Add Integration**
-3. Search for "Dominion Energy Virginia"
-4. Enter your Dominion Energy account credentials:
-   - **Username**: Your Dominion Energy login email
-   - **Password**: Your Dominion Energy login password
-5. Click **Submit**
+2. Click **"+ Add Integration"**
+3. Search for **"Dominion Energy Virginia"**
+4. Choose **"Automatic (with 2FA)"**
+5. Enter your Dominion Energy credentials
+6. Enter the 6-digit SMS code when prompted
+7. Enter your account/meter numbers (found at myaccount.dominionenergy.com)
 
-## How It Works
+### Finding Your Account Details
 
-### Authentication Flow
+Log in to https://myaccount.dominionenergy.com and find:
+- **Account Number**: Displayed on your account page (10 digits)
+- **Customer Number**: Also called "BP Number" (9 digits)
+- **Meter Number**: Your electric meter ID (18 digits)
 
-1. **Gigya Login**: Authenticates with Gigya using your credentials
-   - Endpoint: `https://auth.dominionenergy.com/accounts.login`
-   - Returns: `id_token` (JWT), `UID`, `login_token`
+## Sensors
 
-2. **Token Exchange**: (Implementation detail TBD)
-   - Endpoint: `https://prodsvc-dominioncip.smartcmobile.com/UsermanagementAPI/api/1/Login/auth`
-   - The final Dominion JWT token generation method needs further investigation
+The integration creates the following sensors:
 
-3. **API Calls**: Uses JWT bearer token for all subsequent requests
+| Sensor | Description | Unit |
+|--------|-------------|------|
+| Yesterday Usage | Complete energy usage for previous day | kWh |
+| Monthly Usage | Month-to-date energy consumption | kWh |
+| Last Hour Usage | Most recent hourly reading | kWh |
+| Estimated Cost | Monthly cost estimate ($0.12/kWh) | $ |
+| Account Number | Your Dominion account number | - |
+| Meter Number | Your meter number | - |
 
-### Available Data
+## Data Sources
 
-The integration polls the following endpoints:
+The integration fetches data from two sources and automatically selects the most accurate:
 
-- **Electric Usage**: `/Usageapi/api/V1/Electric` - Monthly consumption and cost data
-- **Hourly Usage**: `/Service/api/1/Usage/UsageData` - Hourly breakdown (optional)
-- **Account Details**: `/Service/api/1/FromDb/GetAccountDetailsFromSSA` - Meter information
-- **Billing Info**: `/Service/api/1/bill/GetBillandInvoiceHistory` - Bill history
+1. **Green Button XML** (Primary) - Official utility billing data with hourly intervals
+2. **Excel Export** (Fallback) - Detailed half-hourly data
 
-## Data Update Frequency
+### Why Yesterday Instead of Today?
 
-The integration polls Dominion Energy every **30 minutes** by default. You can adjust this in `__init__.py` by modifying the `UPDATE_INTERVAL` value.
+Utility data typically has a 24-48 hour lag. Yesterday's data is complete and accurate, while today's data is incomplete and updates throughout the day.
 
-## Advanced Usage
+## Energy Dashboard
 
-### Service Calls
+Add these sensors to your Home Assistant Energy Dashboard:
 
-You can call additional services to get more detailed data:
+1. Go to **Settings** → **Dashboards** → **Energy**
+2. Click **"Add Consumption"**
+3. Select **"Yesterday Usage"** sensor
+4. Set **"Use an entity tracking the total costs"** to **"Estimated Cost"**
 
-```yaml
-# Get hourly usage for a specific date
-service: dominion_energy.get_hourly_usage
-data:
-  date: "2026-02-07"
-```
+## Token Security
 
-### Template Sensors
-
-Create additional sensors based on the data:
-
-```yaml
-template:
-  - sensor:
-      - name: "Daily Energy Cost"
-        unit_of_measurement: "$"
-        state: >
-          {% set usage = states('sensor.dominion_energy_account_daily_usage') | float(0) %}
-          {% set rate = 0.11 %}  # Your rate per kWh
-          {{ (usage * rate) | round(2) }}
-```
-
-## Known Limitations
-
-1. **JWT Token Generation**: The exact method for obtaining the Dominion-specific JWT bearer token (different from Gigya id_token) is unclear and may need client-side JavaScript implementation
-2. **Real-time Usage**: Current/instantaneous power usage is not available through the API
-3. **Billing Details**: Only basic billing info is retrieved; detailed bill breakdown requires additional implementation
-4. **Multiple Accounts**: Currently supports one account per integration instance
-5. **No Historical Data**: Integration doesn't store historical data (use Home Assistant's Recorder for that)
+- ✅ Tokens are stored securely in Home Assistant's config entry
+- ✅ Tokens refresh automatically before expiration
+- ✅ Cookies persist to avoid repeated 2FA prompts
+- ✅ All API communication uses HTTPS
 
 ## Troubleshooting
 
-### Integration not appearing
-
-- Ensure the files are in the correct directory: `config/custom_components/dominion_energy/`
+### Integration won't load
+- Check Home Assistant logs: **Settings** → **System** → **Logs**
+- Search for "dominion_energy"
 - Restart Home Assistant
-- Check the logs for errors: **Settings** → **System** → **Logs**
 
-### Authentication errors
+### No data showing
+- Verify account/meter numbers are correct
+- Check that you're a Dominion Energy Virginia customer
+- Data may take 24-48 hours to appear for new accounts
 
-- Verify your username and password are correct
-- Check if Dominion Energy has changed their login process
-- Look at the Home Assistant logs for specific error messages
+### 2FA not working
+- Ensure your phone number is registered at myaccount.dominionenergy.com
+- Check SMS wasn't blocked or delayed
+- Try re-adding the integration
 
-### No data appearing
-
-- The API endpoints may need to be updated
-- Check the logs for API errors
-- Verify your account has active service with Dominion Energy
+### "Account and meter numbers required"
+- Delete the integration
+- Re-add and enter account details when prompted
 
 ## Development
 
-### Testing the API
+Want to contribute? See [DEPLOYMENT.md](DEPLOYMENT.md) for deployment instructions.
 
-You can test the API connection manually:
+### Running Locally
 
-```python
-import aiohttp
-import asyncio
-from custom_components.dominion_energy.api import DominionEnergyAPI
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/dominion-energy-hacs.git
+cd dominion-energy-hacs
 
-async def test():
-    async with aiohttp.ClientSession() as session:
-        api = DominionEnergyAPI("username", "password", session)
-        await api.async_login()
-        data = await api.async_get_usage_data()
-        print(data)
+# Copy to Home Assistant
+cp -r custom_components/dominion_energy /path/to/homeassistant/custom_components/
 
-asyncio.run(test())
+# Restart Home Assistant
 ```
 
-### Logging
+## Credits
 
-Enable debug logging by adding to your `configuration.yaml`:
-
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.dominion_energy: debug
-```
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## Disclaimer
-
-This is an unofficial integration and is not affiliated with or endorsed by Dominion Energy. Use at your own risk.
+Based on the excellent [dompower](https://github.com/YeomansIII/dompower) library by YeomansIII.
 
 ## License
 
-MIT License - See LICENSE file for details
+This project is licensed under the Apache 2.0 License - see the LICENSE file for details.
 
 ## Support
 
-If you encounter issues:
+- 🐛 **Bug Reports**: [Open an issue](https://github.com/yourusername/dominion-energy-hacs/issues)
+- 💡 **Feature Requests**: [Open an issue](https://github.com/yourusername/dominion-energy-hacs/issues)
+- ❓ **Questions**: [Open a discussion](https://github.com/yourusername/dominion-energy-hacs/discussions)
 
-1. Check the [Issues](https://github.com/yourusername/dominion_energy/issues) page
-2. Enable debug logging and include relevant logs in your issue report
-3. Describe your Home Assistant version and setup
+## Disclaimer
 
-## Acknowledgments
-
-- Home Assistant community for integration examples
-- Dominion Energy customers who helped test
-
-## Future Enhancements
-
-Potential features for future releases:
-
-- [ ] Hourly usage breakdown
-- [ ] Historical usage charts
-- [ ] Bill projection
-- [ ] Usage alerts and notifications
-- [ ] Multiple account support
-- [ ] Time-of-use rate information
-- [ ] Carbon footprint tracking
+This integration is not affiliated with, endorsed by, or connected to Dominion Energy. Use at your own risk.
