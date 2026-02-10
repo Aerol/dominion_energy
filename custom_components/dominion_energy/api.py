@@ -303,6 +303,57 @@ class DominionEnergyAPI:
             text = await response.text()
             return json.loads(text)
 
+    async def _gigya_post(self, endpoint: str, data: dict) -> dict:
+        """Make a POST request to Gigya API."""
+        url = f"{GIGYA_BASE_URL}{endpoint}"
+        
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "*/*",
+        }
+        
+        # Add cookies to session if we have them
+        if self._cookies:
+            for name, value in self._cookies.items():
+                self.session.cookie_jar.update_cookies({name: value})
+        
+        async with self.session.post(url, data=data, headers=headers) as response:
+            # Handle text/javascript content type
+            text = await response.text()
+            return json.loads(text)
+
+    async def async_init_session(self) -> None:
+        """Initialize Gigya session (load WAF cookies + bootstrap SDK).
+        
+        Must be called before async_submit_credentials.
+        """
+        _LOGGER.debug("Initializing Gigya session")
+        
+        # Step 0: Load login page for WAF cookies
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://myaccount.dominionenergy.com/",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            ),
+        }
+        
+        async with self.session.get(LOGIN_URL, headers=headers) as response:
+            await response.read()
+            _LOGGER.debug("WAF cookies obtained")
+        
+        # Step 1: Bootstrap Gigya SDK
+        params = {
+            "apiKey": GIGYA_API_KEY,
+            "pageURL": LOGIN_URL,
+            "sdk": GIGYA_SDK_VERSION,
+            "sdkBuild": GIGYA_SDK_BUILD,
+            "format": "json",
+        }
+        
+        await self._gigya_get(GIGYA_BOOTSTRAP, params)
+        _LOGGER.debug("Gigya bootstrap complete")
+
     async def async_submit_credentials(self, username: str = None, password: str = None) -> dict:
         """Submit credentials and check if 2FA is required.
         
@@ -321,18 +372,30 @@ class DominionEnergyAPI:
         
         _LOGGER.debug("Submitting credentials for %s", username)
         
-        # Step 1: Login
-        params = {
+        # Step 2: Login with credentials (POST with all required params)
+        data = {
             "loginID": username,
             "password": password,
+            "sessionExpiration": "31556952",
+            "targetEnv": "jssdk",
+            "include": (
+                "profile,data,emails,subscriptions,preferences,id_token,groups,loginIDs,"
+            ),
+            "includeUserInfo": "true",
+            "captchaToken": "0",
+            "captchaType": "reCaptchaEnterpriseScore",
+            "loginMode": "standard",
+            "lang": "en",
             "APIKey": GIGYA_API_KEY,
+            "source": "showScreenSet",
             "sdk": GIGYA_SDK_VERSION,
+            "authMode": "cookie",
             "pageURL": LOGIN_URL,
             "sdkBuild": GIGYA_SDK_BUILD,
             "format": "json",
         }
         
-        response = await self._gigya_get(GIGYA_LOGIN, params)
+        response = await self._gigya_post(GIGYA_LOGIN, data)
         error_code = response.get("errorCode", 0)
         
         if error_code == GIGYA_ERROR_INVALID_LOGIN:

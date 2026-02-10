@@ -121,6 +121,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
         try:
+            # Initialize Gigya session (load cookies + bootstrap)
+            await self.api.async_init_session()
+            
             # Submit credentials
             result = await self.api.async_submit_credentials()
 
