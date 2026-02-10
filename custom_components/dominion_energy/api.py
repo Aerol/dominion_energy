@@ -445,16 +445,24 @@ class DominionEnergyAPI:
         
         response = await self._gigya_get(GIGYA_TFA_PROVIDERS, params)
         
-        _LOGGER.debug("TFA providers response: %s", response)
+        _LOGGER.error("DEBUG: TFA providers full response: %s", json.dumps(response, indent=2))
         
         if response.get("errorCode") != 0:
+            _LOGGER.error("TFA providers request failed - errorCode: %s, errorMessage: %s", 
+                         response.get("errorCode"), response.get("errorMessage"))
             raise DominionEnergyAPIError(f"Failed to get TFA providers: {response.get('errorMessage')}")
         
         active_providers = response.get("activeProviders", [])
-        _LOGGER.info("Active TFA providers: %s", active_providers)
+        _LOGGER.error("DEBUG: Active TFA providers: %s", active_providers)
+        
+        # Extract provider names from dict format: [{"name": "gigyaPhone"}, ...]
+        provider_names = [p.get("name") for p in active_providers if isinstance(p, dict)]
+        _LOGGER.error("DEBUG: Provider names extracted: %s", provider_names)
         
         # Initialize TFA with phone (preferred)
-        if "gigyaPhone" in active_providers:
+        if "gigyaPhone" in provider_names:
+            _LOGGER.error("DEBUG: gigyaPhone found in active providers, initializing...")
+            
             init_params = {
                 "provider": TFAProvider.PHONE.value,  # Use enum value
                 "mode": "verify",
@@ -466,15 +474,19 @@ class DominionEnergyAPI:
                 "format": "json",
             }
             
+            _LOGGER.error("DEBUG: TFA init params: %s", init_params)
+            
             init_response = await self._gigya_get(GIGYA_TFA_INIT, init_params)
             
-            _LOGGER.debug("TFA init response: %s", init_response)
+            _LOGGER.error("DEBUG: TFA init full response: %s", json.dumps(init_response, indent=2))
             
             if init_response.get("errorCode") != 0:
+                _LOGGER.error("Failed to init phone TFA - errorCode: %s, errorMessage: %s",
+                             init_response.get("errorCode"), init_response.get("errorMessage"))
                 raise DominionEnergyAPIError(f"Failed to init phone TFA: {init_response.get('errorMessage')}")
             
             self._gigya_assertion = init_response.get("gigyaAssertion")
-            _LOGGER.debug("Got gigya_assertion: %s...", self._gigya_assertion[:20] if self._gigya_assertion else "None")
+            _LOGGER.error("DEBUG: Got gigya_assertion: %s...", self._gigya_assertion[:20] if self._gigya_assertion else "None")
             
             # Get phone numbers
             phone_params = {
@@ -486,34 +498,42 @@ class DominionEnergyAPI:
                 "format": "json",
             }
             
+            _LOGGER.error("DEBUG: Phone numbers request params: %s", phone_params)
+            
             phone_response = await self._gigya_get(GIGYA_TFA_PHONE_NUMBERS, phone_params)
             
-            _LOGGER.debug("Phone numbers response: %s", phone_response)
+            _LOGGER.error("DEBUG: Phone numbers full response: %s", json.dumps(phone_response, indent=2))
             
             if phone_response.get("errorCode") == 0:
                 phones = phone_response.get("phones", [])
-                _LOGGER.info("Found %d phone(s): %s", len(phones), phones)
+                _LOGGER.error("DEBUG: Found %d phone(s): %s", len(phones), phones)
                 targets = []
                 for phone in phones:
-                    targets.append(TFATarget(
+                    target = TFATarget(
                         provider=TFAProvider.PHONE,
                         target=phone.get("obfuscated", "Unknown"),
                         id=phone.get("id", "")
-                    ))
+                    )
+                    _LOGGER.error("DEBUG: Created target: provider=%s, target=%s, id=%s", 
+                                 target.provider, target.target, target.id)
+                    targets.append(target)
                 
                 if targets:
-                    _LOGGER.info("Found %d phone number(s) for 2FA", len(targets))
+                    _LOGGER.error("DEBUG: Returning %d phone number(s) for 2FA", len(targets))
                     return targets
                 else:
-                    _LOGGER.error("Phones array was empty!")
+                    _LOGGER.error("DEBUG: Phones array was empty!")
             else:
-                _LOGGER.error("Phone numbers request failed: %s", phone_response.get("errorMessage"))
+                _LOGGER.error("Phone numbers request failed - errorCode: %s, errorMessage: %s",
+                             phone_response.get("errorCode"), phone_response.get("errorMessage"))
+        else:
+            _LOGGER.error("DEBUG: gigyaPhone NOT in active providers!")
         
         # Fallback to email if phone not available
-        if "gigyaEmail" in active_providers:
-            # Similar flow for email...
-            _LOGGER.warning("Email 2FA not fully implemented yet")
+        if "gigyaEmail" in provider_names:
+            _LOGGER.error("DEBUG: gigyaEmail found but not implemented yet")
         
+        _LOGGER.error("DEBUG: About to raise 'No 2FA options available'")
         raise DominionEnergyAPIError("No 2FA options available")
 
     async def async_send_tfa_code(self, target: TFATarget) -> bool:
