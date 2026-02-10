@@ -183,7 +183,7 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=30),
+            update_interval=timedelta(minutes=25),  # Refresh before 30min token expiry
         )
         self.api = api
 

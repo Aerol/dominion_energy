@@ -197,8 +197,8 @@ class DominionEnergyAPI:
         """Check if the access token has expired."""
         if self._token_expires_at is None:
             return True
-        # Add 30 second buffer
-        return datetime.now(UTC) >= (self._token_expires_at - timedelta(seconds=30))
+        # Refresh 5 minutes before actual expiry for safety
+        return datetime.now(UTC) >= (self._token_expires_at - timedelta(minutes=5))
 
     async def async_refresh_token(self) -> bool:
         """Refresh the access token using the refresh token.
@@ -280,9 +280,11 @@ class DominionEnergyAPI:
             raise DominionEnergyAPIError("No tokens available - authentication required")
 
         if self.is_token_expired:
+            _LOGGER.info("Access token will expire soon, refreshing...")
             success = await self.async_refresh_token()
             if not success:
                 raise TokenExpiredError("Failed to refresh token")
+            _LOGGER.info("Token refresh completed successfully")
 
         return self._access_token
 
