@@ -145,21 +145,48 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 # No 2FA needed - exchange for tokens
                 tokens = await self.api._async_exchange_for_dominion_tokens()
+                
+                # Store tokens for later
+                self.tokens = tokens
+                
+                # Try to get account info
+                _LOGGER.info("No 2FA needed (cookies worked), attempting to get account info")
+                
+                account_info_success = False
+                try:
+                    await self.api.async_get_account_info()
+                    
+                    if self.api._account_number and self.api._meter_number:
+                        account_info_success = True
+                        _LOGGER.info("Account info retrieved successfully")
+                    else:
+                        _LOGGER.warning("Account info API succeeded but didn't return account/meter numbers")
+                except Exception as e:
+                    _LOGGER.warning("Could not auto-fetch account info: %s", e)
+                
+                # If we got account info, create entry
+                if account_info_success:
+                    await self.async_set_unique_id(self.username)
+                    self._abort_if_unique_id_configured()
 
-                await self.async_set_unique_id(self.username)
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=f"Dominion Energy - {self.username}",
-                    data={
-                        "auth_method": "automatic",
-                        CONF_USERNAME: self.username,
-                        CONF_PASSWORD: self.password,
-                        "access_token": tokens.access_token,
-                        "refresh_token": tokens.refresh_token,
-                        "cookies": self.api.export_cookies(),
-                    },
-                )
+                    return self.async_create_entry(
+                        title=f"Dominion Energy - {self.username}",
+                        data={
+                            "auth_method": "automatic",
+                            CONF_USERNAME: self.username,
+                            CONF_PASSWORD: self.password,
+                            "access_token": tokens.access_token,
+                            "refresh_token": tokens.refresh_token,
+                            "account_number": self.api._account_number,
+                            "customer_number": self.api._customer_number,
+                            "meter_number": self.api._meter_number,
+                            "cookies": self.api.export_cookies(),
+                        },
+                    )
+                else:
+                    # Need to ask for account details
+                    _LOGGER.info("Need to ask user for account details")
+                    return await self.async_step_account_details()
 
         except InvalidCredentialsError as e:
             _LOGGER.error("Invalid credentials: %s", e)
