@@ -109,8 +109,8 @@ class TokenExpiredError(DominionEnergyAPIError):
 
 class TFAProvider(Enum):
     """TFA provider types."""
-    PHONE = "phone"
-    EMAIL = "email"
+    PHONE = "gigyaPhone"
+    EMAIL = "gigyaEmail"
 
 
 class TFATarget:
@@ -445,15 +445,18 @@ class DominionEnergyAPI:
         
         response = await self._gigya_get(GIGYA_TFA_PROVIDERS, params)
         
+        _LOGGER.debug("TFA providers response: %s", response)
+        
         if response.get("errorCode") != 0:
             raise DominionEnergyAPIError(f"Failed to get TFA providers: {response.get('errorMessage')}")
         
         active_providers = response.get("activeProviders", [])
+        _LOGGER.info("Active TFA providers: %s", active_providers)
         
         # Initialize TFA with phone (preferred)
         if "gigyaPhone" in active_providers:
             init_params = {
-                "provider": "gigyaPhone",
+                "provider": TFAProvider.PHONE.value,  # Use enum value
                 "mode": "verify",
                 "regToken": self._reg_token,
                 "APIKey": GIGYA_API_KEY,
@@ -465,10 +468,13 @@ class DominionEnergyAPI:
             
             init_response = await self._gigya_get(GIGYA_TFA_INIT, init_params)
             
+            _LOGGER.debug("TFA init response: %s", init_response)
+            
             if init_response.get("errorCode") != 0:
                 raise DominionEnergyAPIError(f"Failed to init phone TFA: {init_response.get('errorMessage')}")
             
             self._gigya_assertion = init_response.get("gigyaAssertion")
+            _LOGGER.debug("Got gigya_assertion: %s...", self._gigya_assertion[:20] if self._gigya_assertion else "None")
             
             # Get phone numbers
             phone_params = {
@@ -482,8 +488,11 @@ class DominionEnergyAPI:
             
             phone_response = await self._gigya_get(GIGYA_TFA_PHONE_NUMBERS, phone_params)
             
+            _LOGGER.debug("Phone numbers response: %s", phone_response)
+            
             if phone_response.get("errorCode") == 0:
                 phones = phone_response.get("phones", [])
+                _LOGGER.info("Found %d phone(s): %s", len(phones), phones)
                 targets = []
                 for phone in phones:
                     targets.append(TFATarget(
@@ -495,6 +504,10 @@ class DominionEnergyAPI:
                 if targets:
                     _LOGGER.info("Found %d phone number(s) for 2FA", len(targets))
                     return targets
+                else:
+                    _LOGGER.error("Phones array was empty!")
+            else:
+                _LOGGER.error("Phone numbers request failed: %s", phone_response.get("errorMessage"))
         
         # Fallback to email if phone not available
         if "gigyaEmail" in active_providers:
