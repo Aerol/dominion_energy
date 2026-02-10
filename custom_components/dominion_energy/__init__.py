@@ -67,12 +67,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Failed to validate token: %s", e)
             return False
 
-        # Get account info
+        # Get account info (optional - integration can work without it)
         try:
             await api.async_get_account_info()
+            _LOGGER.info("Account info retrieved successfully")
         except DominionEnergyAPIError as e:
-            _LOGGER.error("Failed to get account info: %s", e)
-            return False
+            _LOGGER.warning("Could not get account info (not critical): %s", e)
+            # Continue anyway - tokens work fine
 
     else:
         # Manual token method
