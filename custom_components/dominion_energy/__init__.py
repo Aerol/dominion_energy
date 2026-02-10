@@ -102,8 +102,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create data update coordinator
     coordinator = DominionEnergyDataUpdateCoordinator(hass, api)
 
-    # Fetch initial data
-    await coordinator.async_config_entry_first_refresh()
+    # Don't fetch initial data - just store the coordinator
+    # This allows the integration to load even if account numbers are missing
+    # Data will be fetched on the first update interval
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {

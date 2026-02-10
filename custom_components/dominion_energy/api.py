@@ -840,6 +840,8 @@ class DominionEnergyAPI:
         account = account_number or self._account_number
         meter = meter_number or self._meter_number
         
+        _LOGGER.error("DEBUG: async_get_usage called with account=%s, meter=%s", account, meter)
+        
         if not account or not meter:
             raise DominionEnergyAPIError("Account and meter numbers required")
         
@@ -861,9 +863,15 @@ class DominionEnergyAPI:
             "toDate": end_date.strftime("%Y-%m-%d"),
         }
         
+        _LOGGER.error("DEBUG: Usage request URL: %s", url)
+        _LOGGER.error("DEBUG: Usage request params: %s", params)
+        
         async with self.session.get(url, headers=headers, params=params) as response:
+            text = await response.text()
+            _LOGGER.error("DEBUG: Usage response status: %s", response.status)
+            _LOGGER.error("DEBUG: Usage response body: %s", text[:500])
+            
             if response.status != 200:
-                text = await response.text()
                 raise DominionEnergyAPIError(f"Failed to get usage: {response.status} - {text}")
             
             return await response.json()
