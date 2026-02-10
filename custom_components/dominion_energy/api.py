@@ -641,33 +641,72 @@ class DominionEnergyAPI:
         
         await self._gigya_get(GIGYA_TFA_FINALIZE, finalize_params)
         
-        # Finalize registration
+        # Finalize registration to get login_token and id_token
         reg_params = {
             "regToken": self._reg_token,
+            "include": (
+                "profile,data,emails,subscriptions,preferences,id_token,groups,loginIDs,"
+            ),
+            "includeUserInfo": "true",
             "APIKey": GIGYA_API_KEY,
+            "source": "showScreenSet",
             "sdk": GIGYA_SDK_VERSION,
             "pageURL": LOGIN_URL,
             "sdkBuild": GIGYA_SDK_BUILD,
             "format": "json",
         }
+        
+        _LOGGER.error("DEBUG: Finalize registration params: %s", reg_params)
         
         reg_response = await self._gigya_get(GIGYA_FINALIZE_REGISTRATION, reg_params)
         
-        # Get account info with id_token
-        account_params = {
-            "include": "id_token",
-            "regToken": self._reg_token,
-            "APIKey": GIGYA_API_KEY,
-            "sdk": GIGYA_SDK_VERSION,
-            "pageURL": LOGIN_URL,
-            "sdkBuild": GIGYA_SDK_BUILD,
-            "format": "json",
-        }
+        _LOGGER.error("DEBUG: Finalize registration response: %s", json.dumps(reg_response, indent=2))
         
-        account_response = await self._gigya_get(GIGYA_ACCOUNT_INFO, account_params)
+        # Extract tokens from response
+        session_info = reg_response.get("sessionInfo", {})
+        login_token = session_info.get("login_token")
+        id_token = reg_response.get("id_token")
         
-        self._gigya_id_token = account_response.get("id_token")
-        self._gigya_uid = account_response.get("UID")
+        _LOGGER.error("DEBUG: Got login_token: %s, id_token: %s", 
+                     bool(login_token), bool(id_token))
+        
+        if id_token:
+            # Got id_token from finalize registration!
+            self._gigya_id_token = id_token
+            self._gigya_uid = reg_response.get("UID")
+        elif login_token:
+            # Use login_token to get account info
+            _LOGGER.error("DEBUG: No id_token from registration, using login_token to get account info")
+            
+            # Set login_token as cookie
+            self.session.cookie_jar.update_cookies(
+                {f"glt_{GIGYA_API_KEY}": login_token}
+            )
+            
+            # POST to getAccountInfo with login_token
+            account_data = {
+                "include": "groups,profile,data,id_token,",
+                "lang": "en",
+                "APIKey": GIGYA_API_KEY,
+                "sdk": GIGYA_SDK_VERSION,
+                "login_token": login_token,
+                "authMode": "cookie",
+                "pageURL": LOGIN_URL,
+                "sdkBuild": GIGYA_SDK_BUILD,
+                "format": "json",
+            }
+            
+            _LOGGER.error("DEBUG: Getting account info with login_token")
+            
+            account_response = await self._gigya_post(GIGYA_ACCOUNT_INFO, account_data)
+            
+            _LOGGER.error("DEBUG: Account info response: %s", json.dumps(account_response, indent=2))
+            
+            self._gigya_id_token = account_response.get("id_token")
+            self._gigya_uid = account_response.get("UID")
+        else:
+            _LOGGER.error("DEBUG: No login_token or id_token from finalize registration!")
+            raise DominionEnergyAPIError("No login_token or id_token from finalize registration")
         
         if not self._gigya_id_token:
             raise DominionEnergyAPIError("Failed to get id_token after 2FA")
@@ -682,19 +721,39 @@ class DominionEnergyAPI:
         _LOGGER.debug("Exchanging Gigya token for Dominion tokens")
         
         url = f"{BASE_URL}{ENDPOINT_LOGIN}"
-        headers = DEFAULT_HEADERS.copy()
+        headers = {
+            **DEFAULT_HEADERS,
+            "Authorization": f"Bearer {self._gigya_id_token}",
+            "e2eid": str(uuid.uuid4()),
+            "pt": "",
+            "st": "PL",
+        }
         
         payload = {
-            "idToken": self._gigya_id_token,
-            "UUID": str(uuid.uuid4()),
+            "username": "",
+            "password": "",
+            "guestToken": self._gigya_id_token,
+            "customattributes": {
+                "client": "",
+                "version": "",
+                "deviceId": "",
+                "deviceName": "",
+                "os": "",
+            },
         }
+        
+        _LOGGER.error("DEBUG: Token exchange URL: %s", url)
+        _LOGGER.error("DEBUG: Token exchange payload: %s", payload)
         
         async with self.session.post(url, headers=headers, json=payload) as response:
             if response.status != 200:
                 text = await response.text()
+                _LOGGER.error("Token exchange HTTP error: %d - %s", response.status, text)
                 raise DominionEnergyAPIError(f"Token exchange failed: {response.status} - {text}")
             
             data = await response.json()
+        
+        _LOGGER.error("DEBUG: Token exchange response: %s", json.dumps(data, indent=2))
         
         status = data.get("status", {})
         if status.get("code") != 200:
