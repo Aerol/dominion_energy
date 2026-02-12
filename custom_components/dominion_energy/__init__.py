@@ -285,6 +285,67 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             yesterday = today - timedelta(days=1)
             first_of_month = today.replace(day=1)
             
+            # Get actual billing period from Dominion API
+            _LOGGER.error("DEBUG: Fetching billing information...")
+            billing_info = await self.api.async_get_billing_info()
+            
+            billing_start = None
+            billing_end = None
+            amount_due = None
+            current_charges = None
+            
+            if billing_info and billing_info.get("status", {}).get("code") == 200:
+                data = billing_info.get("data", {})
+                results = data.get("zBillInvHeadtoItemNav", {}).get("results", [])
+                
+                if results:
+                    latest_bill = results[0]
+                    
+                    # Parse billing dates
+                    bill_start_str = latest_bill.get("billPdStart", "")
+                    bill_end_str = latest_bill.get("billPdEnd", "")
+                    
+                    if bill_start_str and bill_end_str:
+                        try:
+                            # Parse format: "12/16/2025 00:00:00"
+                            billing_start = datetime.strptime(bill_start_str, "%m/%d/%Y %H:%M:%S").date()
+                            billing_end = datetime.strptime(bill_end_str, "%m/%d/%Y %H:%M:%S").date()
+                            
+                            # Get amounts
+                            amount_due = float(latest_bill.get("amountDue", "0"))
+                            current_charges = float(latest_bill.get("totalCurrentCharges", "0"))
+                            
+                            _LOGGER.error("DEBUG: Actual billing period from API: %s to %s", 
+                                         billing_start, billing_end)
+                            _LOGGER.error("DEBUG: Amount due: $%.2f, Current charges: $%.2f", 
+                                         amount_due, current_charges)
+                        except (ValueError, AttributeError) as e:
+                            _LOGGER.warning("Could not parse billing dates: %s", e)
+            
+            # If we got billing dates from API, use them
+            # Otherwise fall back to assuming 17th of month
+            if billing_start and billing_end:
+                # Use the actual billing period from Dominion
+                # But extend to today if we're past the bill end date
+                if today > billing_end:
+                    # We're in the new billing period, use bill_end as start
+                    actual_billing_start = billing_end + timedelta(days=1)
+                else:
+                    # We're still in the current billing period
+                    actual_billing_start = billing_start
+            else:
+                # Fallback: Dominion billing period (typically 17th to 17th)
+                billing_day = 17
+                
+                # Calculate billing period start date
+                if today.day >= billing_day:
+                    actual_billing_start = today.replace(day=billing_day)
+                else:
+                    last_month = today.replace(day=1) - timedelta(days=1)
+                    actual_billing_start = last_month.replace(day=billing_day)
+            
+            _LOGGER.error("DEBUG: Using billing start date: %s to %s", actual_billing_start, today)
+            
             # Fetch YESTERDAY's data for daily usage (today's data isn't finalized yet)
             _LOGGER.error("DEBUG: === Fetching YESTERDAY's data (%s) for daily usage ===", yesterday)
             daily_excel = await self.api.async_get_usage(
@@ -302,7 +363,7 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                 daily_green_button = None
             
             # Fetch MONTH's data for monthly usage
-            _LOGGER.error("DEBUG: === Fetching MONTHLY data (%s to %s) ===", first_of_month, today)
+            _LOGGER.error("DEBUG: === Fetching CALENDAR MONTH data (%s to %s) ===", first_of_month, today)
             monthly_excel = await self.api.async_get_usage(
                 start_date=datetime.combine(first_of_month, datetime.min.time()),
                 end_date=datetime.combine(today, datetime.max.time())
@@ -316,6 +377,22 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             except Exception as e:
                 _LOGGER.error("DEBUG: Failed to fetch monthly Green Button data: %s", e)
                 monthly_green_button = None
+            
+            # Fetch BILLING PERIOD data (using actual dates from Dominion API)
+            _LOGGER.error("DEBUG: === Fetching BILLING PERIOD data (%s to %s) ===", actual_billing_start, today)
+            billing_excel = await self.api.async_get_usage(
+                start_date=datetime.combine(actual_billing_start, datetime.min.time()),
+                end_date=datetime.combine(today, datetime.max.time())
+            )
+            
+            try:
+                billing_green_button = await self.api.async_get_green_button_data(
+                    start_date=datetime.combine(actual_billing_start, datetime.min.time()),
+                    end_date=datetime.combine(today, datetime.max.time())
+                )
+            except Exception as e:
+                _LOGGER.error("DEBUG: Failed to fetch billing Green Button data: %s", e)
+                billing_green_button = None
 
             # Parse the response into sensor data
             parsed_data = {
@@ -325,11 +402,16 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                 "last_hour_reading_time": None,
                 "daily_usage": 0,
                 "monthly_usage": 0,
+                "billing_usage": 0,
+                "amount_due": amount_due if amount_due else 0,
+                "current_charges": current_charges if current_charges else 0,
                 "estimated_cost": 0,
                 "daily_excel": 0,
                 "daily_green_button": 0,
                 "monthly_excel": 0,
                 "monthly_green_button": 0,
+                "billing_excel": 0,
+                "billing_green_button": 0,
             }
             
             # Parse DAILY data
@@ -378,8 +460,37 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             parsed_data["monthly_excel"] = monthly_excel_total
             parsed_data["monthly_green_button"] = monthly_gb_total
             
-            # Estimate cost based on monthly usage
-            parsed_data["estimated_cost"] = round(parsed_data["monthly_usage"] * 0.12, 2)
+            # Parse BILLING PERIOD data
+            billing_excel_total = 0
+            billing_gb_total = 0
+            
+            if billing_excel and isinstance(billing_excel, dict) and "raw_excel" in billing_excel:
+                _LOGGER.error("DEBUG: === Processing BILLING PERIOD Excel ===")
+                excel_result = self._parse_excel_data(billing_excel["raw_excel"])
+                billing_excel_total = excel_result["total"]
+                _LOGGER.error("DEBUG: Billing Period Excel: %.2f kWh", billing_excel_total)
+            
+            if billing_green_button and isinstance(billing_green_button, dict) and "raw_xml" in billing_green_button:
+                _LOGGER.error("DEBUG: === Processing BILLING PERIOD Green Button ===")
+                billing_gb_total = self._parse_green_button_data(billing_green_button["raw_xml"])
+                _LOGGER.error("DEBUG: Billing Period Green Button: %.2f kWh", billing_gb_total)
+            
+            # Use Green Button for billing if available, otherwise Excel
+            parsed_data["billing_usage"] = billing_gb_total if billing_gb_total > 0 else billing_excel_total
+            parsed_data["billing_excel"] = billing_excel_total
+            parsed_data["billing_green_button"] = billing_gb_total
+            
+            # Use actual bill amount if available, otherwise estimate
+            if amount_due and amount_due > 0:
+                parsed_data["estimated_cost"] = amount_due
+                _LOGGER.info("Using actual bill amount: $%.2f", amount_due)
+            elif current_charges and current_charges > 0:
+                parsed_data["estimated_cost"] = current_charges
+                _LOGGER.info("Using current charges: $%.2f", current_charges)
+            else:
+                # Fallback to estimate based on usage
+                parsed_data["estimated_cost"] = round(parsed_data["billing_usage"] * 0.12, 2)
+                _LOGGER.info("Estimating cost based on usage: $%.2f", parsed_data["estimated_cost"])
             
             # Log comparison
             _LOGGER.error("DEBUG: === FINAL RESULTS ===")
@@ -387,6 +498,8 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                          parsed_data["daily_usage"], daily_excel_total, daily_gb_total)
             _LOGGER.error("DEBUG: Monthly: %.2f kWh (Excel: %.2f, GB: %.2f)", 
                          parsed_data["monthly_usage"], monthly_excel_total, monthly_gb_total)
+            _LOGGER.error("DEBUG: Billing: %.2f kWh (Excel: %.2f, GB: %.2f)", 
+                         parsed_data["billing_usage"], billing_excel_total, billing_gb_total)
 
             return parsed_data
 

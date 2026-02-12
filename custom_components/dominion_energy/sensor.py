@@ -35,6 +35,7 @@ async def async_setup_entry(
         DominionEnergyCurrentHourUsageSensor(coordinator, config_entry),
         DominionEnergyDailyUsageSensor(coordinator, config_entry),
         DominionEnergyMonthlyUsageSensor(coordinator, config_entry),
+        DominionEnergyBillingUsageSensor(coordinator, config_entry),
         DominionEnergyEstimatedCostSensor(coordinator, config_entry),
         DominionEnergyAccountNumberSensor(coordinator, config_entry),
         DominionEnergyMeterNumberSensor(coordinator, config_entry),
@@ -122,7 +123,7 @@ class DominionEnergyDailyUsageSensor(DominionEnergySensorBase):
 
 
 class DominionEnergyMonthlyUsageSensor(DominionEnergySensorBase):
-    """Sensor for monthly energy usage."""
+    """Sensor for monthly energy usage (calendar month)."""
 
     _attr_name = "Monthly Usage"
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -139,6 +140,28 @@ class DominionEnergyMonthlyUsageSensor(DominionEnergySensorBase):
         """Return the state of the sensor."""
         if self.coordinator.data:
             return self.coordinator.data.get("monthly_usage")
+        return None
+
+
+class DominionEnergyBillingUsageSensor(DominionEnergySensorBase):
+    """Sensor for billing period energy usage (matches Dominion billing cycle)."""
+
+    _attr_name = "Billing Period Usage"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_icon = "mdi:file-document-outline"
+
+    @property
+    def unique_id(self) -> str:
+        """Return unique ID for this sensor."""
+        return f"{self._config_entry.entry_id}_billing_usage"
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if self.coordinator.data:
+            return self.coordinator.data.get("billing_usage")
         return None
 
 

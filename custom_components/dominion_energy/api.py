@@ -29,6 +29,7 @@ ENDPOINT_REFRESH = "/UsermanagementAPI/api/1/login/auth/refresh"
 ENDPOINT_USAGE = "/Service/api/1/Usage/DownloadExcelNew"
 ENDPOINT_GREEN_BUTTON = "/ServiceExt/api/1/Usage/GreenButton"
 ENDPOINT_ACCOUNTS = "/UsermanagementAPI/api/1/Account"
+ENDPOINT_BILLING = "/Service/api/1/bill/GetBillandInvoiceHistory"
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
@@ -1010,3 +1011,60 @@ class DominionEnergyAPI:
             
             # Return as raw XML data
             return {"raw_xml": content}
+
+    async def async_get_billing_info(
+        self,
+        account_number: str = None,
+    ) -> dict[str, Any]:
+        """Get billing information including dates and amount due.
+        
+        Returns billing period dates, amount due, current charges, etc.
+        """
+        token = await self.async_ensure_valid_token()
+        
+        account = account_number or self._account_number
+        customer = self._customer_number
+        
+        if not account:
+            raise DominionEnergyAPIError("Account number required")
+        
+        # We need an invoice ID - try to get the most recent one
+        # For now, we'll call without it and see if it returns current billing
+        url = f"{BASE_URL}{ENDPOINT_BILLING}"
+        headers = {
+            **DEFAULT_HEADERS,
+            "Authorization": f"Bearer {token}",
+            "customerNumber": customer or "",
+            "accountNumber": account,
+            "ReferenceId": f"MM-{uuid.uuid4()}",
+        }
+        
+        params = {
+            "accountNumber": account,
+        }
+        
+        _LOGGER.debug("Fetching billing info for account %s", account)
+        
+        async with self.session.get(url, headers=headers, params=params) as response:
+            if response.status == 401:
+                _LOGGER.warning("Got 401, refreshing token and retrying")
+                refresh_success = await self.async_refresh_token()
+                if not refresh_success:
+                    raise DominionEnergyAPIError("Token refresh failed")
+                
+                headers["Authorization"] = f"Bearer {self._access_token}"
+                
+                async with self.session.get(url, headers=headers, params=params) as retry_response:
+                    if retry_response.status != 200:
+                        text = await retry_response.text()
+                        _LOGGER.error("Failed to get billing info: %s - %s", retry_response.status, text)
+                        return {}
+                    
+                    return await retry_response.json()
+            
+            if response.status != 200:
+                text = await response.text()
+                _LOGGER.debug("Failed to get billing info: %s - %s", response.status, text)
+                return {}
+            
+            return await response.json()
