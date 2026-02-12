@@ -286,65 +286,120 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             first_of_month = today.replace(day=1)
             
             # Get actual billing period from Dominion API
-            _LOGGER.error("DEBUG: Fetching billing information...")
-            billing_info = await self.api.async_get_billing_info()
+            _LOGGER.error("DEBUG: Fetching current bill information...")
+            bill_info = await self.api.async_get_current_bill()
             
-            billing_start = None
-            billing_end = None
+            next_meter_read = None
             amount_due = None
             current_charges = None
+            due_date = None
             
-            if billing_info and billing_info.get("status", {}).get("code") == 200:
-                data = billing_info.get("data", {})
-                results = data.get("zBillInvHeadtoItemNav", {}).get("results", [])
+            if bill_info and bill_info.get("status", {}).get("code") == 200:
+                data_list = bill_info.get("data", [])
                 
-                if results:
-                    latest_bill = results[0]
+                if data_list:
+                    current_bill = data_list[0]
+                    extension = current_bill.get("extension", {})
                     
-                    # Parse billing dates
-                    bill_start_str = latest_bill.get("billPdStart", "")
-                    bill_end_str = latest_bill.get("billPdEnd", "")
+                    # Get next meter read date to calculate billing period
+                    next_read_str = extension.get("NextMeterReadDate", "")
                     
-                    if bill_start_str and bill_end_str:
+                    if next_read_str:
                         try:
-                            # Parse format: "12/16/2025 00:00:00"
-                            billing_start = datetime.strptime(bill_start_str, "%m/%d/%Y %H:%M:%S").date()
-                            billing_end = datetime.strptime(bill_end_str, "%m/%d/%Y %H:%M:%S").date()
-                            
-                            # Get amounts
-                            amount_due = float(latest_bill.get("amountDue", "0"))
-                            current_charges = float(latest_bill.get("totalCurrentCharges", "0"))
-                            
-                            _LOGGER.error("DEBUG: Actual billing period from API: %s to %s", 
-                                         billing_start, billing_end)
-                            _LOGGER.error("DEBUG: Amount due: $%.2f, Current charges: $%.2f", 
-                                         amount_due, current_charges)
+                            # Parse format: "02-16-2026"
+                            next_meter_read = datetime.strptime(next_read_str, "%m-%d-%Y").date()
+                            _LOGGER.error("DEBUG: Next meter read date: %s", next_meter_read)
                         except (ValueError, AttributeError) as e:
-                            _LOGGER.warning("Could not parse billing dates: %s", e)
+                            _LOGGER.warning("Could not parse next meter read date: %s", e)
+                    
+                    # Get amount due and current charges
+                    amount_due_str = current_bill.get("totalAmountDue", "0.00")
+                    current_charges_str = current_bill.get("currentCharges", "0.00")
+                    due_date_str = current_bill.get("billDueDate", "")
+                    
+                    try:
+                        amount_due = float(amount_due_str)
+                        current_charges = float(current_charges_str)
+                        _LOGGER.error("DEBUG: Amount due: $%.2f, Current charges: $%.2f", 
+                                     amount_due, current_charges)
+                        
+                        if due_date_str:
+                            due_date = datetime.strptime(due_date_str, "%m-%d-%Y").date()
+                            _LOGGER.error("DEBUG: Bill due date: %s", due_date)
+                    except (ValueError, TypeError) as e:
+                        _LOGGER.warning("Could not parse bill amounts: %s", e)
             
-            # If we got billing dates from API, use them
-            # Otherwise fall back to assuming 17th of month
-            if billing_start and billing_end:
-                # Use the actual billing period from Dominion
-                # But extend to today if we're past the bill end date
-                if today > billing_end:
-                    # We're in the new billing period, use bill_end as start
-                    actual_billing_start = billing_end + timedelta(days=1)
-                else:
-                    # We're still in the current billing period
-                    actual_billing_start = billing_start
+            # Calculate billing period based on next meter read
+            # Meter is read at END of billing period, so period ends day before read
+            if next_meter_read:
+                # Billing period ends the day BEFORE the meter read
+                billing_period_end = next_meter_read - timedelta(days=1)
+                # Billing periods are typically 30 days
+                actual_billing_start = billing_period_end - timedelta(days=29)  # 29 days before gives us 30-day period
+                _LOGGER.error("DEBUG: Next meter read: %s, period ends: %s, starts: %s", 
+                             next_meter_read, billing_period_end, actual_billing_start)
             else:
-                # Fallback: Dominion billing period (typically 17th to 17th)
+                # Fallback: Dominion billing period (typically 16th/17th to 15th/16th)
+                # Default to 17th
                 billing_day = 17
                 
-                # Calculate billing period start date
                 if today.day >= billing_day:
                     actual_billing_start = today.replace(day=billing_day)
                 else:
                     last_month = today.replace(day=1) - timedelta(days=1)
                     actual_billing_start = last_month.replace(day=billing_day)
             
-            _LOGGER.error("DEBUG: Using billing start date: %s to %s", actual_billing_start, today)
+            _LOGGER.error("DEBUG: Using billing period: %s to %s", actual_billing_start, today)
+                    _LOGGER.error("DEBUG: Today (%s) is within bill period (%s to %s)", 
+                                 today, billing_start, billing_end)
+                
+                # Sanity check: billing period should be ~30 days max
+                days_diff = (today - actual_billing_start).days
+                if days_diff > 35:
+                    _LOGGER.warning("Billing period seems too long (%d days from %s), using fallback to billing day 16", 
+                                   days_diff, actual_billing_start)
+                    # Fall back to billing day calculation (16th based on user's data)
+                    billing_day = 16
+                    if today.day >= billing_day:
+                        actual_billing_start = today.replace(day=billing_day)
+                    else:
+                        last_month = today.replace(day=1) - timedelta(days=1)
+                        try:
+                            actual_billing_start = last_month.replace(day=billing_day)
+                        except ValueError:
+                            actual_billing_start = last_month
+                    _LOGGER.info("Using fallback billing start: %s", actual_billing_start)
+                elif days_diff < 0:
+                    _LOGGER.warning("Billing start is in the future! Using fallback to billing day 16")
+                    billing_day = 16
+                    if today.day >= billing_day:
+                        actual_billing_start = today.replace(day=billing_day)
+                    else:
+                        last_month = today.replace(day=1) - timedelta(days=1)
+                        try:
+                            actual_billing_start = last_month.replace(day=billing_day)
+                        except ValueError:
+                            actual_billing_start = last_month
+                    _LOGGER.info("Using fallback billing start: %s", actual_billing_start)
+                else:
+                    _LOGGER.error("DEBUG: Billing period is %d days", days_diff)
+            else:
+                _LOGGER.warning("Could not get billing dates from API, using fallback to billing day 16")
+                # Fallback: Dominion billing period (16th to 15th based on user's actual bills)
+                billing_day = 16
+                
+                # Calculate billing period start date
+                if today.day >= billing_day:
+                    actual_billing_start = today.replace(day=billing_day)
+                else:
+                    last_month = today.replace(day=1) - timedelta(days=1)
+                    try:
+                        actual_billing_start = last_month.replace(day=billing_day)
+                    except ValueError:
+                        actual_billing_start = last_month
+            
+            _LOGGER.error("DEBUG: FINAL billing dates - Start: %s, End: %s, Days: %d", 
+                         actual_billing_start, today, (today - actual_billing_start).days)
             
             # Fetch YESTERDAY's data for daily usage (today's data isn't finalized yet)
             _LOGGER.error("DEBUG: === Fetching YESTERDAY's data (%s) for daily usage ===", yesterday)
@@ -481,16 +536,20 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
             parsed_data["billing_green_button"] = billing_gb_total
             
             # Use actual bill amount if available, otherwise estimate
-            if amount_due and amount_due > 0:
-                parsed_data["estimated_cost"] = amount_due
-                _LOGGER.info("Using actual bill amount: $%.2f", amount_due)
-            elif current_charges and current_charges > 0:
+            # amount_due includes previous balance + current charges
+            # current_charges is just this period's usage
+            if current_charges and current_charges > 0:
+                # Use current charges (just this period) for better accuracy
                 parsed_data["estimated_cost"] = current_charges
-                _LOGGER.info("Using current charges: $%.2f", current_charges)
+                _LOGGER.error("DEBUG: Using current period charges: $%.2f", current_charges)
+            elif amount_due and amount_due > 0:
+                # Fall back to total amount due (includes previous balance)
+                parsed_data["estimated_cost"] = amount_due
+                _LOGGER.error("DEBUG: Using total amount due: $%.2f", amount_due)
             else:
                 # Fallback to estimate based on usage
                 parsed_data["estimated_cost"] = round(parsed_data["billing_usage"] * 0.12, 2)
-                _LOGGER.info("Estimating cost based on usage: $%.2f", parsed_data["estimated_cost"])
+                _LOGGER.error("DEBUG: Estimating cost based on usage: $%.2f", parsed_data["estimated_cost"])
             
             # Log comparison
             _LOGGER.error("DEBUG: === FINAL RESULTS ===")
