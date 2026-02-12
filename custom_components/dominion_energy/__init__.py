@@ -350,53 +350,6 @@ class DominionEnergyDataUpdateCoordinator(DataUpdateCoordinator):
                     actual_billing_start = last_month.replace(day=billing_day)
             
             _LOGGER.error("DEBUG: Using billing period: %s to %s", actual_billing_start, today)
-                    _LOGGER.error("DEBUG: Today (%s) is within bill period (%s to %s)", 
-                                 today, billing_start, billing_end)
-                
-                # Sanity check: billing period should be ~30 days max
-                days_diff = (today - actual_billing_start).days
-                if days_diff > 35:
-                    _LOGGER.warning("Billing period seems too long (%d days from %s), using fallback to billing day 16", 
-                                   days_diff, actual_billing_start)
-                    # Fall back to billing day calculation (16th based on user's data)
-                    billing_day = 16
-                    if today.day >= billing_day:
-                        actual_billing_start = today.replace(day=billing_day)
-                    else:
-                        last_month = today.replace(day=1) - timedelta(days=1)
-                        try:
-                            actual_billing_start = last_month.replace(day=billing_day)
-                        except ValueError:
-                            actual_billing_start = last_month
-                    _LOGGER.info("Using fallback billing start: %s", actual_billing_start)
-                elif days_diff < 0:
-                    _LOGGER.warning("Billing start is in the future! Using fallback to billing day 16")
-                    billing_day = 16
-                    if today.day >= billing_day:
-                        actual_billing_start = today.replace(day=billing_day)
-                    else:
-                        last_month = today.replace(day=1) - timedelta(days=1)
-                        try:
-                            actual_billing_start = last_month.replace(day=billing_day)
-                        except ValueError:
-                            actual_billing_start = last_month
-                    _LOGGER.info("Using fallback billing start: %s", actual_billing_start)
-                else:
-                    _LOGGER.error("DEBUG: Billing period is %d days", days_diff)
-            else:
-                _LOGGER.warning("Could not get billing dates from API, using fallback to billing day 16")
-                # Fallback: Dominion billing period (16th to 15th based on user's actual bills)
-                billing_day = 16
-                
-                # Calculate billing period start date
-                if today.day >= billing_day:
-                    actual_billing_start = today.replace(day=billing_day)
-                else:
-                    last_month = today.replace(day=1) - timedelta(days=1)
-                    try:
-                        actual_billing_start = last_month.replace(day=billing_day)
-                    except ValueError:
-                        actual_billing_start = last_month
             
             _LOGGER.error("DEBUG: FINAL billing dates - Start: %s, End: %s, Days: %d", 
                          actual_billing_start, today, (today - actual_billing_start).days)
